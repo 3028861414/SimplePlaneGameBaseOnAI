@@ -4,9 +4,10 @@
  * implement the same small surface.
  */
 export class FlightSocket {
-  constructor({ onReady, onState, onError, onClose } = {}) {
+  constructor({ onReady, onState, onChunks, onError, onClose } = {}) {
     this.onReady = onReady;
     this.onState = onState;
+    this.onChunks = onChunks;
     this.onError = onError;
     this.onClose = onClose;
     this.ws = null;
@@ -49,6 +50,8 @@ export class FlightSocket {
         this.onReady?.(message.world, message.state);
       } else if (message.type === 'state') {
         this.onState?.(message.state);
+      } else if (message.type === 'chunks') {
+        this.onChunks?.(message);
       } else if (message.type === 'error') {
         this.onError?.(message.message || '飞行核心返回错误。');
       }
@@ -73,6 +76,10 @@ export class FlightSocket {
 
   reset() {
     this._send({ type: 'reset' });
+  }
+
+  setChunkRadius(value) {
+    this._send({ type: 'chunkRadius', value });
   }
 
   disconnect() {

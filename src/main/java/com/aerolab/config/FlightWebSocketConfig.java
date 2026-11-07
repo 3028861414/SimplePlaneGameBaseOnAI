@@ -27,8 +27,8 @@ public class FlightWebSocketConfig implements WebSocketConfigurer {
     @Bean
     public ServletServerContainerFactoryBean createWebSocketContainer() {
         ServletServerContainerFactoryBean container = new ServletServerContainerFactoryBean();
-        container.setMaxTextMessageBufferSize(2 * 1024 * 1024);
-        container.setMaxBinaryMessageBufferSize(2 * 1024 * 1024);
+        container.setMaxTextMessageBufferSize(8 * 1024 * 1024);
+        container.setMaxBinaryMessageBufferSize(8 * 1024 * 1024);
         container.setMaxSessionIdleTimeout(120_000L);
         return container;
     }

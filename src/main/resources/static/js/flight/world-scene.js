@@ -3,6 +3,7 @@ import { Viewport } from '../core/viewport.js';
 import { decodeFloat32Base64 } from '../util/binary.js';
 import { makeUnitGeometry } from '../util/part-geometry.js';
 import { srgbToLinear } from '../util/color-map.js';
+import { terrainColor } from './terrain-style.js';
 
 export class FlightWorldScene {
   constructor(container, model) {
@@ -17,10 +18,18 @@ export class FlightWorldScene {
     this.camera.far = 22000;
     this.camera.fov = 55;
     this.camera.updateProjectionMatrix();
-    this.scene.fog = new THREE.Fog(0xb7d2dc, 700, 5200);
+    this.scene.fog = new THREE.Fog(0xb7d2dc, 280, 1700);
 
     this.world = null;
-    this.heightSampler = null;
+    this.chunks = new Map();
+    this.chunkGroups = new Map();
+    this.chunkQueue = [];
+    this.queuedChunkKeys = new Set();
+    this.chunkSize = 512;
+    this.chunkResolution = 65;
+    this.chunkRadius = 3;
+    this.minChunkRadius = 2;
+    this.maxChunkRadius = 6;
     this.hasState = false;
     this.cameraMode = 'third';
     this.orbitYaw = 0;
@@ -30,11 +39,24 @@ export class FlightWorldScene {
     this.lookPitch = 0;
     this.dragging = null;
     this.currentPosition = new THREE.Vector3();
-    this.targetPosition = new THREE.Vector3();
     this.currentQuaternion = new THREE.Quaternion();
-    this.targetQuaternion = new THREE.Quaternion();
     this.cameraLookTarget = new THREE.Vector3();
+    this.stateBuffer = [];
+    this.interpolationDelaySeconds = 0.1;
+    this.sunBase = new THREE.Vector3(-1200, 2100, 800);
+    this.sunSpriteBase = new THREE.Vector3(-4200, 5000, 2900);
     this._events = new AbortController();
+
+    this.chunkMaterials = {
+      terrain: new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.96,
+        metalness: 0,
+        side: THREE.FrontSide
+      }),
+      trunk: new THREE.MeshStandardMaterial({ color: 0x5b4933, roughness: 1 }),
+      crown: new THREE.MeshStandardMaterial({ color: 0x355a34, roughness: 0.95 })
+    };
 
     this._buildLightingAndSky();
     this._buildAircraft();
@@ -47,7 +69,10 @@ export class FlightWorldScene {
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.18));
 
     this.sun = new THREE.DirectionalLight(0xfff3d4, 3.1);
-    this.sun.position.set(-1200, 2100, 800);
+    this.sun.position.copy(this.sunBase);
+    this.sunTarget = new THREE.Object3D();
+    this.scene.add(this.sunTarget);
+    this.sun.target = this.sunTarget;
     this.scene.add(this.sun);
 
     const skyGeometry = new THREE.SphereGeometry(9500, 32, 18);
@@ -58,22 +83,21 @@ export class FlightWorldScene {
         glowColor: { value: new THREE.Color(0xf8e5bd) }
       },
       vertexShader: `
-        varying vec3 vWorldPosition;
+        varying vec3 vSkyDirection;
         void main() {
-          vec4 world = modelMatrix * vec4(position, 1.0);
-          vWorldPosition = world.xyz;
-          gl_Position = projectionMatrix * viewMatrix * world;
+          vSkyDirection = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
       fragmentShader: `
         uniform vec3 topColor;
         uniform vec3 horizonColor;
         uniform vec3 glowColor;
-        varying vec3 vWorldPosition;
+        varying vec3 vSkyDirection;
         void main() {
-          float h = normalize(vWorldPosition).y;
+          float h = normalize(vSkyDirection).y;
           vec3 color = mix(horizonColor, topColor, smoothstep(-0.02, 0.68, h));
-          float sunGlow = pow(max(dot(normalize(vWorldPosition), normalize(vec3(-0.46, 0.62, 0.31))), 0.0), 28.0);
+          float sunGlow = pow(max(dot(normalize(vSkyDirection), normalize(vec3(-0.46, 0.62, 0.31))), 0.0), 28.0);
           color = mix(color, glowColor, sunGlow * 0.55);
           gl_FragColor = vec4(color, 1.0);
         }
@@ -86,12 +110,12 @@ export class FlightWorldScene {
     this.scene.add(this.sky);
 
     const sunGlow = createRadialTexture(['rgba(255,248,217,1)', 'rgba(255,223,151,0.42)', 'rgba(255,210,120,0)']);
-    const sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    this.sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({
       map: sunGlow, transparent: true, depthWrite: false, opacity: 0.88, fog: false, toneMapped: false
     }));
-    sunSprite.position.set(-4200, 5000, 2900);
-    sunSprite.scale.set(1000, 1000, 1);
-    this.scene.add(sunSprite);
+    this.sunSprite.position.copy(this.sunSpriteBase);
+    this.sunSprite.scale.set(1000, 1000, 1);
+    this.scene.add(this.sunSprite);
 
     const cloudTexture = createRadialTexture(['rgba(255,255,255,0.5)', 'rgba(255,255,255,0.12)', 'rgba(255,255,255,0)']);
     const random = mulberry32(7719);
@@ -137,71 +161,128 @@ export class FlightWorldScene {
   }
 
   setWorld(worldDto) {
-    this.world = {
-      ...worldDto,
-      heights: decodeFloat32Base64(worldDto.heights)
-    };
-    this.heightSampler = buildHeightSampler(this.world);
-    this._buildTerrain();
+    this.world = worldDto;
+    this.chunkSize = worldDto.chunkSize || 512;
+    this.chunkResolution = worldDto.chunkResolution || 65;
+    this.minChunkRadius = worldDto.minChunkRadius ?? 2;
+    this.maxChunkRadius = worldDto.maxChunkRadius ?? 6;
+    this.chunkRadius = THREE.MathUtils.clamp(
+      worldDto.chunkRadius ?? 3, this.minChunkRadius, this.maxChunkRadius
+    );
+    this._updateFog();
     this._buildRunway();
-    this._buildTrees();
+    this.applyChunkUpdate(worldDto.chunks ?? [], [], { immediate: true });
     this.ready = true;
   }
 
-  setInitialState(state) {
-    this.state = state;
-    const position = new THREE.Vector3(state.position.x, state.position.y, state.position.z);
-    const quaternion = new THREE.Quaternion(
-      state.orientation.x, state.orientation.y, state.orientation.z, state.orientation.w
-    ).normalize();
-    this.currentPosition.copy(position);
-    this.targetPosition.copy(position);
-    this.currentQuaternion.copy(quaternion);
-    this.targetQuaternion.copy(quaternion);
-    this.aircraft.position.copy(position);
-    this.aircraft.quaternion.copy(quaternion);
-    this.aircraft.visible = this.cameraMode === 'third';
-    this.hasState = true;
-    this.cameraLookTarget.copy(position).add(new THREE.Vector3(4, 1.5, 0));
-    this._updateCamera(1, true);
+  replaceChunks(chunks) {
+    const removed = [...this.chunks.keys()];
+    this.chunkQueue.length = 0;
+    this.queuedChunkKeys.clear();
+    this.applyChunkUpdate(chunks ?? [], removed, { immediate: true });
   }
 
-  pushState(state) {
-    this.state = state;
-    this.targetPosition.set(state.position.x, state.position.y, state.position.z);
-    this.targetQuaternion.set(
-      state.orientation.x, state.orientation.y, state.orientation.z, state.orientation.w
-    ).normalize();
-    if (!this.hasState) this.setInitialState(state);
+  setChunkRadius(radius) {
+    this.chunkRadius = THREE.MathUtils.clamp(radius, this.minChunkRadius, this.maxChunkRadius);
+    this._updateFog();
   }
 
-  _buildTerrain() {
-    const world = this.world;
-    const resolution = world.resolution;
+  applyChunkUpdate(added, removed, { immediate = false } = {}) {
+    for (const key of removed ?? []) this._unloadChunk(key);
+    for (const dto of added ?? []) {
+      const key = `${dto.chunkX},${dto.chunkZ}`;
+      if (this.chunks.has(key)) continue;
+      if (immediate) this._buildChunk(dto);
+      else this._enqueueChunk(dto);
+    }
+  }
+
+  getMapData() {
+    let biome = 'PLAINS';
+    if (this.state?.position) {
+      const chunkX = Math.floor(this.state.position.x / this.chunkSize);
+      const chunkZ = Math.floor(this.state.position.z / this.chunkSize);
+      biome = this.chunks.get(`${chunkX},${chunkZ}`)?.biome ?? biome;
+    }
+    return {
+      chunks: this.chunks,
+      chunkSize: this.chunkSize,
+      radius: this.chunkRadius,
+      biome,
+      loaded: this.chunkGroups.size
+    };
+  }
+
+  _updateFog() {
+    const viewDistance = Math.max(800, this.chunkSize * (this.chunkRadius + 0.5));
+    this.scene.fog.near = viewDistance * 0.4;
+    this.scene.fog.far = viewDistance * 0.98;
+  }
+
+  _enqueueChunk(dto) {
+    const key = `${dto.chunkX},${dto.chunkZ}`;
+    if (this.queuedChunkKeys.has(key)) return;
+    this.queuedChunkKeys.add(key);
+    this.chunkQueue.push(dto);
+  }
+
+  _processChunkQueue(limit = 2) {
+    let built = 0;
+    while (built < limit && this.chunkQueue.length > 0) {
+      const dto = this.chunkQueue.shift();
+      const key = `${dto.chunkX},${dto.chunkZ}`;
+      this.queuedChunkKeys.delete(key);
+      if (this.chunks.has(key)) continue;
+      this._buildChunk(dto);
+      built++;
+    }
+  }
+
+  _buildChunk(dto) {
+    const heights = decodeFloat32Base64(dto.heights);
+    if (heights.length !== dto.resolution * dto.resolution) return;
+    const chunk = {
+      ...dto,
+      heights,
+      key: `${dto.chunkX},${dto.chunkZ}`
+    };
+    const group = new THREE.Group();
+    group.name = `terrain-chunk-${dto.chunkX}-${dto.chunkZ}`;
+    const mesh = new THREE.Mesh(this._buildChunkGeometry(chunk), this.chunkMaterials.terrain);
+    mesh.name = group.name;
+    group.add(mesh);
+    this._addChunkTrees(chunk, group);
+    this.scene.add(group);
+    this.chunks.set(chunk.key, chunk);
+    this.chunkGroups.set(chunk.key, group);
+  }
+
+  _buildChunkGeometry(chunk) {
+    const resolution = chunk.resolution;
     const count = resolution * resolution;
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
     const indices = new Uint32Array((resolution - 1) * (resolution - 1) * 6);
-    const stepX = world.sizeX / (resolution - 1);
-    const stepZ = world.sizeZ / (resolution - 1);
-    const range = Math.max(1, world.maxHeight - world.minHeight);
+    const stepX = chunk.sizeX / (resolution - 1);
+    const stepZ = chunk.sizeZ / (resolution - 1);
 
     for (let iz = 0; iz < resolution; iz++) {
-      const z = world.originZ + iz * stepZ;
+      const z = chunk.originZ + iz * stepZ;
       for (let ix = 0; ix < resolution; ix++) {
         const index = iz * resolution + ix;
-        const x = world.originX + ix * stepX;
-        const height = world.heights[index];
+        const x = chunk.originX + ix * stepX;
+        const height = chunk.heights[index];
         positions[index * 3] = x;
         positions[index * 3 + 1] = height;
         positions[index * 3 + 2] = z;
 
-        const left = world.heights[iz * resolution + Math.max(0, ix - 1)];
-        const right = world.heights[iz * resolution + Math.min(resolution - 1, ix + 1)];
-        const up = world.heights[Math.max(0, iz - 1) * resolution + ix];
-        const down = world.heights[Math.min(resolution - 1, iz + 1) * resolution + ix];
+        const left = chunk.heights[iz * resolution + Math.max(0, ix - 1)];
+        const right = chunk.heights[iz * resolution + Math.min(resolution - 1, ix + 1)];
+        const up = chunk.heights[Math.max(0, iz - 1) * resolution + ix];
+        const down = chunk.heights[Math.min(resolution - 1, iz + 1) * resolution + ix];
         const slope = Math.hypot((right - left) / (2 * stepX), (down - up) / (2 * stepZ));
-        const rgb = terrainColor(height, world.minHeight, range, slope, hash2(ix, iz));
+        const variation = hash2(chunk.chunkX * 131 + ix, chunk.chunkZ * 131 + iz);
+        const rgb = terrainColor(height, slope, variation);
         colors[index * 3] = srgbToLinear(rgb[0]);
         colors[index * 3 + 1] = srgbToLinear(rgb[1]);
         colors[index * 3 + 2] = srgbToLinear(rgb[2]);
@@ -226,16 +307,159 @@ export class FlightWorldScene {
     geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     geometry.computeVertexNormals();
     geometry.computeBoundingSphere();
-    const material = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.96,
-      metalness: 0,
-      side: THREE.FrontSide
-    });
-    this.terrain = new THREE.Mesh(geometry, material);
-    this.terrain.name = 'perlin-terrain';
-    this.terrain.receiveShadow = false;
-    this.scene.add(this.terrain);
+    return geometry;
+  }
+
+  _addChunkTrees(chunk, group) {
+    const random = mulberry32(
+      ((chunk.chunkX * 73856093) ^ (chunk.chunkZ * 19349663) ^ 0x9e3779b9) >>> 0
+    );
+    const placements = [];
+    const runway = this.world.runway;
+    const target = 9 + Math.floor(random() * 12);
+    for (let attempt = 0; attempt < target * 5 && placements.length < target; attempt++) {
+      const x = chunk.originX + 6 + random() * (chunk.sizeX - 12);
+      const z = chunk.originZ + 6 + random() * (chunk.sizeZ - 12);
+      const height = this._sampleChunk(chunk, x, z);
+      if (height === null || height < 12 || height > 280) continue;
+      if (Math.abs(x - runway.centerX) < runway.length * 0.5 + 24
+          && Math.abs(z - runway.centerZ) < runway.width * 0.5 + 32) continue;
+      const hx = this._sampleChunk(chunk, x + 6, z) ?? height;
+      const hz = this._sampleChunk(chunk, x, z + 6) ?? height;
+      if (Math.abs(hx - height) + Math.abs(hz - height) > 1.8) continue;
+      placements.push({
+        x,
+        z,
+        height,
+        scale: 0.62 + random() * 0.9,
+        shade: random()
+      });
+    }
+    if (placements.length === 0) return;
+
+    const trunkGeometry = new THREE.CylinderGeometry(0.32, 0.5, 1, 5);
+    const crownGeometry = new THREE.ConeGeometry(1, 1, 7);
+    const trunks = new THREE.InstancedMesh(trunkGeometry, this.chunkMaterials.trunk, placements.length);
+    const crowns = new THREE.InstancedMesh(crownGeometry, this.chunkMaterials.crown, placements.length);
+    trunks.frustumCulled = false;
+    crowns.frustumCulled = false;
+    const dummy = new THREE.Object3D();
+    const color = new THREE.Color();
+    for (let i = 0; i < placements.length; i++) {
+      const placement = placements[i];
+      const treeHeight = 7 + placement.scale * 8;
+      dummy.position.set(placement.x, placement.height + treeHeight * 0.23, placement.z);
+      dummy.scale.set(placement.scale, treeHeight * 0.46, placement.scale);
+      dummy.rotation.set(0, placement.shade * Math.PI * 2, 0);
+      dummy.updateMatrix();
+      trunks.setMatrixAt(i, dummy.matrix);
+      dummy.position.y = placement.height + treeHeight * 0.68;
+      dummy.scale.set(placement.scale * 2.1, treeHeight * 0.72, placement.scale * 2.1);
+      dummy.updateMatrix();
+      crowns.setMatrixAt(i, dummy.matrix);
+      color.setRGB(...treeShade(placement.shade));
+      crowns.setColorAt(i, color);
+    }
+    trunks.instanceMatrix.needsUpdate = true;
+    crowns.instanceMatrix.needsUpdate = true;
+    if (crowns.instanceColor) crowns.instanceColor.needsUpdate = true;
+    group.add(trunks, crowns);
+  }
+
+  _unloadChunk(key) {
+    const group = this.chunkGroups.get(key);
+    if (group) {
+      this.scene.remove(group);
+      group.traverse(object => {
+        if (object.isMesh) object.geometry?.dispose();
+      });
+    }
+    this.chunkGroups.delete(key);
+    this.chunks.delete(key);
+    this.queuedChunkKeys.delete(key);
+    const index = this.chunkQueue.findIndex(dto => `${dto.chunkX},${dto.chunkZ}` === key);
+    if (index >= 0) this.chunkQueue.splice(index, 1);
+  }
+
+  _heightAt(x, z) {
+    if (!this.chunkSize) return null;
+    const chunkX = Math.floor(x / this.chunkSize);
+    const chunkZ = Math.floor(z / this.chunkSize);
+    const chunk = this.chunks.get(`${chunkX},${chunkZ}`);
+    return chunk ? this._sampleChunk(chunk, x, z) : null;
+  }
+
+  _sampleChunk(chunk, x, z) {
+    const resolution = chunk.resolution;
+    const stepX = chunk.sizeX / (resolution - 1);
+    const stepZ = chunk.sizeZ / (resolution - 1);
+    const gx = Math.max(0, Math.min(resolution - 1, (x - chunk.originX) / stepX));
+    const gz = Math.max(0, Math.min(resolution - 1, (z - chunk.originZ) / stepZ));
+    const x0 = Math.floor(gx);
+    const z0 = Math.floor(gz);
+    const x1 = Math.min(x0 + 1, resolution - 1);
+    const z1 = Math.min(z0 + 1, resolution - 1);
+    const fx = gx - x0;
+    const fz = gz - z0;
+    const a = chunk.heights[z0 * resolution + x0];
+    const b = chunk.heights[z0 * resolution + x1];
+    const c = chunk.heights[z1 * resolution + x0];
+    const d = chunk.heights[z1 * resolution + x1];
+    const top = a + (b - a) * fx;
+    const bottom = c + (d - c) * fx;
+    return top + (bottom - top) * fz;
+  }
+
+  _sampleState(state) {
+    return {
+      position: new THREE.Vector3(state.position.x, state.position.y, state.position.z),
+      quaternion: new THREE.Quaternion(
+        state.orientation.x, state.orientation.y, state.orientation.z, state.orientation.w
+      ).normalize(),
+      velocity: new THREE.Vector3(
+        state.velocity?.x ?? 0,
+        state.velocity?.y ?? 0,
+        state.velocity?.z ?? 0
+      ),
+      serverTime: state.timeSeconds ?? 0,
+      receivedAt: performance.now()
+    };
+  }
+
+  setInitialState(state) {
+    this.state = state;
+    const sample = this._sampleState(state);
+    this.stateBuffer = [sample];
+    this.currentPosition.copy(sample.position);
+    this.currentQuaternion.copy(sample.quaternion);
+    this.aircraft.position.copy(sample.position);
+    this.aircraft.quaternion.copy(sample.quaternion);
+    this.aircraft.visible = this.cameraMode === 'third';
+    this.hasState = true;
+    this.cameraLookTarget.copy(sample.position).add(new THREE.Vector3(4, 1.5, 0));
+    this._followWorld();
+    this._updateCamera(1, true);
+  }
+
+  pushState(state) {
+    this.state = state;
+    if (!this.hasState) {
+      this.setInitialState(state);
+      return;
+    }
+    const sample = this._sampleState(state);
+    const last = this.stateBuffer.at(-1);
+    const jumped = !last
+      || sample.serverTime < last.serverTime - 0.01
+      || sample.position.distanceToSquared(last.position) > 400_000;
+    if (jumped) {
+      this.stateBuffer = [sample];
+      this.currentPosition.copy(sample.position);
+      this.currentQuaternion.copy(sample.quaternion);
+    } else {
+      this.stateBuffer.push(sample);
+      if (this.stateBuffer.length > 16) this.stateBuffer.shift();
+    }
   }
 
   _buildRunway() {
@@ -276,53 +500,6 @@ export class FlightWorldScene {
     }
     lights.instanceMatrix.needsUpdate = true;
     this.scene.add(lights);
-  }
-
-  _buildTrees() {
-    const random = mulberry32(40503);
-    const placements = [];
-    const runway = this.world.runway;
-    const halfLength = runway.length * 0.5 + 120;
-    const halfWidth = 190;
-    for (let attempt = 0; attempt < 3000 && placements.length < 620; attempt++) {
-      const x = this.world.originX + 100 + random() * (this.world.sizeX - 200);
-      const z = this.world.originZ + 100 + random() * (this.world.sizeZ - 200);
-      if (Math.abs(x - runway.centerX) < halfLength && Math.abs(z - runway.centerZ) < halfWidth) continue;
-      const height = this.heightSampler(x, z);
-      if (height < 20 || height > 210) continue;
-      const slope = Math.abs(this.heightSampler(x + 12, z) - this.heightSampler(x - 12, z))
-        + Math.abs(this.heightSampler(x, z + 12) - this.heightSampler(x, z - 12));
-      if (slope > 7) continue;
-      placements.push({ x, z, height, scale: 0.62 + random() * 0.95, shade: random() });
-    }
-
-    const trunkGeometry = new THREE.CylinderGeometry(0.32, 0.5, 1, 5);
-    const crownGeometry = new THREE.ConeGeometry(1, 1, 7);
-    const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x5b4933, roughness: 1 });
-    const crownMaterial = new THREE.MeshStandardMaterial({ color: 0x355a34, roughness: 0.95 });
-    const trunks = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, placements.length);
-    const crowns = new THREE.InstancedMesh(crownGeometry, crownMaterial, placements.length);
-    const dummy = new THREE.Object3D();
-    const color = new THREE.Color();
-    for (let i = 0; i < placements.length; i++) {
-      const placement = placements[i];
-      const treeHeight = 7 + placement.scale * 8;
-      dummy.position.set(placement.x, placement.height + treeHeight * 0.23, placement.z);
-      dummy.scale.set(placement.scale, treeHeight * 0.46, placement.scale);
-      dummy.rotation.set(0, placement.shade * Math.PI * 2, 0);
-      dummy.updateMatrix();
-      trunks.setMatrixAt(i, dummy.matrix);
-      dummy.position.y = placement.height + treeHeight * 0.68;
-      dummy.scale.set(placement.scale * 2.1, treeHeight * 0.72, placement.scale * 2.1);
-      dummy.updateMatrix();
-      crowns.setMatrixAt(i, dummy.matrix);
-      color.setRGB(...treeShade(placement.shade));
-      crowns.setColorAt(i, color);
-    }
-    trunks.instanceMatrix.needsUpdate = true;
-    crowns.instanceMatrix.needsUpdate = true;
-    if (crowns.instanceColor) crowns.instanceColor.needsUpdate = true;
-    this.scene.add(trunks, crowns);
   }
 
   toggleCamera() {
@@ -382,14 +559,59 @@ export class FlightWorldScene {
   }
 
   _update(dt) {
-    if (this.hasState) {
-      const smoothing = 1 - Math.exp(-Math.max(dt, 0.001) * 18);
-      this.currentPosition.lerp(this.targetPosition, smoothing);
-      this.currentQuaternion.slerp(this.targetQuaternion, smoothing);
-      this.aircraft.position.copy(this.currentPosition);
-      this.aircraft.quaternion.copy(this.currentQuaternion);
-      this._updateCamera(dt, false);
+    this._processChunkQueue(1);
+    if (!this.hasState || this.stateBuffer.length === 0) return;
+    const now = performance.now();
+    const latest = this.stateBuffer.at(-1);
+    const renderTime = latest.serverTime
+      + (now - latest.receivedAt) / 1000
+      - this.interpolationDelaySeconds;
+
+    let before = this.stateBuffer[0];
+    let after = before;
+    for (let i = 1; i < this.stateBuffer.length; i++) {
+      const sample = this.stateBuffer[i];
+      if (sample.serverTime <= renderTime) {
+        before = sample;
+        after = sample;
+      } else {
+        after = sample;
+        break;
+      }
     }
+
+    const span = after.serverTime - before.serverTime;
+    const alpha = span > 1e-6
+      ? THREE.MathUtils.clamp((renderTime - before.serverTime) / span, 0, 1)
+      : 1;
+    this.currentPosition.lerpVectors(before.position, after.position, alpha);
+    this.currentQuaternion.slerpQuaternions(before.quaternion, after.quaternion, alpha);
+    if (renderTime > latest.serverTime) {
+      const ahead = Math.min(0.15, renderTime - latest.serverTime);
+      this.currentPosition.addScaledVector(latest.velocity, ahead);
+    }
+
+    this.aircraft.position.copy(this.currentPosition);
+    this.aircraft.quaternion.copy(this.currentQuaternion);
+    this._followWorld();
+    this._updateCamera(dt, false);
+  }
+
+  _followWorld() {
+    const position = this.currentPosition;
+    this.sky.position.set(position.x, 0, position.z);
+    this.clouds.position.set(position.x, 0, position.z);
+    this.sunSprite.position.set(
+      position.x + this.sunSpriteBase.x,
+      this.sunSpriteBase.y,
+      position.z + this.sunSpriteBase.z
+    );
+    this.sun.position.set(
+      position.x + this.sunBase.x,
+      position.y + this.sunBase.y,
+      position.z + this.sunBase.z
+    );
+    this.sunTarget.position.copy(position);
   }
 
   _updateCamera(dt, immediate) {
@@ -425,8 +647,9 @@ export class FlightWorldScene {
       this.currentPosition.y + Math.sin(this.orbitPitch) * this.orbitDistance + 1.0,
       this.currentPosition.z + Math.sin(orbitAngle) * horizontal
     );
-    if (this.heightSampler) {
-      desiredPosition.y = Math.max(desiredPosition.y, this.heightSampler(desiredPosition.x, desiredPosition.z) + 2.5);
+    const ground = this._heightAt(desiredPosition.x, desiredPosition.z);
+    if (ground !== null) {
+      desiredPosition.y = Math.max(desiredPosition.y, ground + 2.5);
     }
     const lookAhead = forward.clone().multiplyScalar(4).add(new THREE.Vector3(0, 1.2, 0)).add(this.currentPosition);
     if (immediate) {
@@ -445,62 +668,6 @@ export class FlightWorldScene {
     this._events.abort();
     this.viewport.dispose();
   }
-}
-
-function buildHeightSampler(world) {
-  const resolution = world.resolution;
-  const stepX = world.sizeX / (resolution - 1);
-  const stepZ = world.sizeZ / (resolution - 1);
-  return (x, z) => {
-    const localX = Math.max(world.originX, Math.min(world.originX + world.sizeX, x));
-    const localZ = Math.max(world.originZ, Math.min(world.originZ + world.sizeZ, z));
-    const gx = (localX - world.originX) / stepX;
-    const gz = (localZ - world.originZ) / stepZ;
-    const x0 = Math.floor(gx);
-    const z0 = Math.floor(gz);
-    const x1 = Math.min(x0 + 1, resolution - 1);
-    const z1 = Math.min(z0 + 1, resolution - 1);
-    const fx = gx - x0;
-    const fz = gz - z0;
-    const a = world.heights[z0 * resolution + x0];
-    const b = world.heights[z0 * resolution + x1];
-    const c = world.heights[z1 * resolution + x0];
-    const d = world.heights[z1 * resolution + x1];
-    const top = a + (b - a) * fx;
-    const bottom = c + (d - c) * fx;
-    return top + (bottom - top) * fz;
-  };
-}
-
-function terrainColor(height, minHeight, range, slope, variation) {
-  const t = THREE.MathUtils.clamp((height - minHeight) / range, 0, 1);
-  let color;
-  if (t < 0.12) color = [47, 66, 43];
-  else if (t < 0.3) color = [58, 82, 47];
-  else if (t < 0.5) color = [83, 98, 57];
-  else if (t < 0.68) color = [113, 109, 75];
-  else if (t < 0.84) color = [112, 110, 102];
-  else color = [179, 188, 187];
-  if (slope > 0.28) {
-    const rock = [97, 94, 86];
-    const mix = THREE.MathUtils.clamp((slope - 0.28) / 0.65, 0, 0.72);
-    color = [
-      color[0] + (rock[0] - color[0]) * mix,
-      color[1] + (rock[1] - color[1]) * mix,
-      color[2] + (rock[2] - color[2]) * mix
-    ];
-  }
-  if (t > 0.83 && slope < 0.3) {
-    const snow = [208, 216, 218];
-    const mix = THREE.MathUtils.clamp((t - 0.83) / 0.13, 0, 0.8);
-    color = [
-      color[0] + (snow[0] - color[0]) * mix,
-      color[1] + (snow[1] - color[1]) * mix,
-      color[2] + (snow[2] - color[2]) * mix
-    ];
-  }
-  const shift = (variation - 0.5) * 18;
-  return color.map(channel => Math.max(0, Math.min(255, channel + shift)));
 }
 
 function treeShade(value) {

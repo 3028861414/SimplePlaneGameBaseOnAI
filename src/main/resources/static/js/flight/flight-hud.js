@@ -1,17 +1,21 @@
 import { escapeHtml, formatNumber } from '../core/ui.js';
 import { BINDING_DEFINITIONS, formatKeyCode } from '../core/model.js';
 import { icon } from '../util/icons.js';
+import { FlightMinimap } from './minimap.js';
+import { biomeLabel } from './terrain-style.js';
 
 const CARDINALS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
 export class FlightHud {
-  constructor(overlayHost, { model, onToggleCamera, onRestart, onExit, onRetry }) {
+  constructor(overlayHost, { model, onToggleCamera, onRestart, onExit, onRetry, onChunkRadiusChange }) {
     this.overlayHost = overlayHost;
     this.model = model;
     this.onToggleCamera = onToggleCamera;
     this.onRestart = onRestart;
     this.onExit = onExit;
     this.onRetry = onRetry;
+    this.onChunkRadiusChange = onChunkRadiusChange;
+    this._chunkSize = 512;
     this.cameraMode = 'third';
     this._lastPhase = '';
     this._key = name => formatKeyCode(this.model.bindings?.[name]);
@@ -53,6 +57,29 @@ export class FlightHud {
             <button class="flight-chip-btn" type="button" data-hud-exit>${icon('back', 14)} 返回建模</button>
           </div>
         </div>
+
+        <aside class="flight-map-panel">
+          <div class="flight-map-head">
+            <div>
+              <div class="panel-kicker">Terrain Map</div>
+              <strong>分层设色地形图</strong>
+            </div>
+            <span class="flight-map-range" data-map-range>± — m</span>
+          </div>
+          <canvas class="flight-map-canvas" data-minimap width="256" height="256" aria-label="以飞机为中心的分层设色地形图"></canvas>
+          <div class="flight-map-meta">
+            <span data-map-biome>平原</span>
+            <span data-map-loaded>0 区块</span>
+          </div>
+          <label class="chunk-range">
+            <div class="chunk-range__head">
+              <span>区块加载半径</span>
+              <output data-chunk-radius>3</output>
+            </div>
+            <input type="range" min="2" max="6" step="1" value="3" data-chunk-radius-input disabled>
+            <div class="chunk-range__ticks"><span data-chunk-min>2</span><span data-chunk-max>6</span></div>
+          </label>
+        </aside>
 
         <div class="flight-notice" data-flight-notice>飞行核心生成中…</div>
         <div class="flight-warning" data-flight-warning hidden></div>
@@ -208,8 +235,17 @@ export class FlightHud {
       loadingDetail: this.overlayHost.querySelector('[data-flight-loading-detail]'),
       retry: this.overlayHost.querySelector('[data-hud-retry]'),
       restart: this.overlayHost.querySelector('[data-hud-restart]'),
-      cameraButton: this.overlayHost.querySelector('[data-hud-camera]')
+      cameraButton: this.overlayHost.querySelector('[data-hud-camera]'),
+      minimapCanvas: this.overlayHost.querySelector('[data-minimap]'),
+      mapRange: this.overlayHost.querySelector('[data-map-range]'),
+      mapBiome: this.overlayHost.querySelector('[data-map-biome]'),
+      mapLoaded: this.overlayHost.querySelector('[data-map-loaded]'),
+      chunkRadius: this.overlayHost.querySelector('[data-chunk-radius]'),
+      chunkRadiusInput: this.overlayHost.querySelector('[data-chunk-radius-input]'),
+      chunkMin: this.overlayHost.querySelector('[data-chunk-min]'),
+      chunkMax: this.overlayHost.querySelector('[data-chunk-max]')
     };
+    this.minimap = new FlightMinimap(this.ui.minimapCanvas);
     this._buildHeadingTape();
   }
 
@@ -253,6 +289,26 @@ export class FlightHud {
       if (event.target.closest('[data-hud-exit]')) this.onExit?.();
       if (event.target.closest('[data-hud-retry]')) this.onRetry?.();
     });
+    this.ui.chunkRadiusInput.addEventListener('input', () => {
+      const radius = Number(this.ui.chunkRadiusInput.value);
+      this.ui.chunkRadius.textContent = String(radius);
+      this.minimap.setView(radius, this._chunkSize);
+      this.onChunkRadiusChange?.(radius);
+    });
+    this.ui.chunkRadiusInput.addEventListener('change', () => this.ui.chunkRadiusInput.blur());
+  }
+
+  setChunkSettings({ radius, min, max, chunkSize }) {
+    this._chunkSize = chunkSize || this._chunkSize;
+    this.ui.chunkRadiusInput.min = String(min ?? 2);
+    this.ui.chunkRadiusInput.max = String(max ?? 6);
+    this.ui.chunkRadiusInput.value = String(radius ?? 3);
+    this.ui.chunkRadiusInput.disabled = false;
+    this.ui.chunkRadius.textContent = String(radius ?? 3);
+    this.ui.chunkMin.textContent = String(min ?? 2);
+    this.ui.chunkMax.textContent = String(max ?? 6);
+    this.ui.mapRange.textContent = `± ${Math.round(((radius ?? 3) + 0.5) * this._chunkSize)} m`;
+    this.minimap.setView(radius ?? 3, this._chunkSize);
   }
 
   setLoading(title, detail, { retry = false } = {}) {
@@ -288,7 +344,7 @@ export class FlightHud {
     if (note) note.textContent = `拖动环视 · 滚轮${mode === 'first' ? '视野' : '远近'} · ${this.model.flightSystems?.engines?.length ?? 0} 台引擎`;
   }
 
-  update(state) {
+  update(state, mapData = null) {
     const knots = Math.max(0, state.speedMps * 1.943844);
     this.ui.airspeed.textContent = formatNumber(knots, 0);
     this.ui.airspeedMs.textContent = `${formatNumber(state.speedMps, 1)} m/s`;
@@ -332,7 +388,6 @@ export class FlightHud {
     if (state.crashed) warnings.push('载具已失去控制');
     else if (state.stalled) warnings.push('失速警告 · 增加油门并低头');
     if (!state.crashed && !state.onGround && state.altitudeAglM < 45) warnings.push('地形接近');
-    if (state.outsideWorld) warnings.push('已离开训练空域');
     this.ui.warning.hidden = warnings.length === 0;
     this.ui.warning.textContent = warnings.join(' · ');
 
@@ -348,6 +403,13 @@ export class FlightHud {
       this.ui.notice.classList.add('is-visible');
     } else if (!state.stalled && !state.crashed) {
       this.ui.notice.classList.remove('is-visible');
+    }
+
+    if (mapData) {
+      this.ui.mapBiome.textContent = biomeLabel(mapData.biome);
+      this.ui.mapLoaded.textContent = `${mapData.chunks.size} 区块`;
+      this.ui.mapRange.textContent = `± ${Math.round((mapData.radius + 0.5) * mapData.chunkSize)} m`;
+      this.minimap.update(state, mapData);
     }
   }
 

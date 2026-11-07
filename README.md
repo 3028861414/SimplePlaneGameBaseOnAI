@@ -55,16 +55,31 @@ AEROLAB 是一个本地运行的三维飞行器/简单载具工作台。后端�
 ### 虚拟驾驶
 
 - 从“驾驶”导航项或建模页“试飞”按钮进入虚拟世界。
-- 程序化柏林噪声地形：6000 m × 6000 m、257 × 257 高度场、连续起伏、固定种子、可重复生成。
-- 简单飞机跑道：1600 m 长、52 m 宽，包含中心线、边线、入口标线和跑道灯；地形在跑道区域被压平。
-- 跑道两侧程序化树木、天空渐变、太阳光晕、云层、雾和远景。
+- 无限程序化柏林噪声世界：不设世界边界，按 512 m × 512 m 区块生成，每区块 65 × 65 高度采样。
+- 地形由多层低频噪声混合生成，包含：
+  - 平原：低起伏草地；
+  - 丘陵：中频起伏与缓坡；
+  - 山地：脊状噪声形成的高耸山脊和雪线；
+  - 高原：独立高原掩码形成的平坦顶面与边缘陡坡。
+- 固定种子、连续高度函数；相邻区块共享边缘采样，不会出现缝隙。
+- 简单飞机跑道：1600 m 长、52 m 宽，包含中心线、边线、入口标线和跑道灯；地形在跑道及其过渡区域被压平。
+- 区块流式加载 / 卸载：
+  - 服务器根据飞机所在区块加载附近区块，离开后卸载并释放会话缓存；
+  - 客户端只构建收到的区块网格与树木，离开范围后移除并释放几何体；
+  - 右上角提供 2–6 区块的加载半径滑动条，默认 3，可随不同设备性能和视距需求调整；
+  - 加载半径保存在浏览器本地偏好中，下次进入驾驶时继续使用。
+- 右上角分层设色地形小地图：
+  - 始终以玩家飞机为中心，北向朝上；
+  - 按海拔分层着色，并叠加简单山体阴影、50 m 等高带和方位环；
+  - 显示当前地形类型、已加载区块数量和地图覆盖范围。
+- 跑道两侧程序化树木、天空渐变、太阳光晕、云层、雾和远景；天空、太阳与云层会跟随无限世界中的飞机。
 - 驾驶动力学：
   - 油门加速、滑跑、达到起飞速度后抬头离地；
   - 油门、俯仰、偏航、加力、刹车；
   - 偏航时自动协调侧倾；
   - 低速失速下沉；
   - 引擎安装点产生的俯仰/偏航配平力矩；
-  - 地形碰撞、硬着陆、离开训练空域等终止条件；
+  - 地形碰撞、硬着陆等终止条件；
   - `R` 或界面按钮可重置到跑道起点。
 - 第一人称 / 第三人称驾驶：
   - `C` 切换；
@@ -77,8 +92,8 @@ AEROLAB 是一个本地运行的三维飞行器/简单载具工作台。后端�
   - 航向带与方位读数；
   - 高度、AGL、垂直速度；
   - 油门环、引擎推力、G 载荷和引擎指示；
-  - 失速、地形接近、离开空域和坠毁告警。
-- 服务器端以 60 Hz 运行飞行物理，以 30 Hz 通过 WebSocket 推送遥测；前端只负责输入、插值和渲染。
+  - 失速、地形接近和坠毁告警。
+- 服务器端以 60 Hz 运行飞行物理，以 30 Hz 通过 WebSocket 推送遥测；前端使用带延迟缓冲的状态插值和时间外推，消除 30 Hz 遥测直接驱动网格时的“一卡一卡”现象。
 
 ## 环境要求
 
@@ -275,7 +290,8 @@ src/main/java/com/aerolab
 │   ├── simulation     FlowConditions / WindFrame / FlowGrid / FlowField
 │   │                  AerodynamicSimulator（接口）
 │   │                  SimplifiedAerodynamicSimulator（实现）
-│   ├── world          PerlinNoise2D / TerrainWorld / Runway / WorldGenerator
+│   ├── world          PerlinNoise2D / TerrainWorld / TerrainChunk / TerrainBiome
+│   │                  Runway / WorldConfig / WorldGenerator
 │   └── flight         FlightSystems / FlightSystemsFactory / KeyBindings
 │                      FlightControlState / FlightDynamics / FlightState
 ├── web
@@ -292,7 +308,7 @@ src/main/resources/static
 │   ├── core           API 客户端、模型仓库与导入导出、WebGL 视口、通用 UI
 │   ├── modeling       建模编辑器、飞行操纵配置和几何构建
 │   ├── simulation     模拟控制器、流场采样、流线/粒子/场雾/剖面渲染
-│   ├── flight         飞行视图、飞行 WebSocket 客户端、飞行 HUD、程序化世界渲染
+│   ├── flight         飞行视图、WebSocket 客户端、HUD、小地图、地形样式、区块世界渲染
 │   └── util           色标、图标、几何工具、二进制解码
 ├── vendor/three       本地 Three.js 及 addons
 └── index.html
@@ -305,11 +321,11 @@ src/main/resources/static
 - WebSocket 层只负责会话生命周期、输入转发和遥测序列化；飞行物理位于 `core.flight.FlightDynamics`。
 - 前端渲染层只消费统一的结果：
   - 风洞：表面网格、压力/速度数组、结构化流场、求解摘要；
-  - 驾驶：世界高度场/跑道数据、30 Hz 飞行状态、模型与操纵配置。
+  - 驾驶：区块高度数据、跑道数据、30 Hz 飞行状态、模型与操纵配置。
 - 若替换为 Swing/JavaFX 客户端，可直接调用：
   - `AerodynamicSimulator.simulate(model, conditions)` 绘制风洞结果；
   - `FlightDynamics.setKey(...)` / `step(dt)` / `snapshot()` 驱动飞行；
-  - `WorldGenerator.generate()` 获取同一地形与跑道。
+  - `WorldGenerator.generate()` 获取同一无限地形、区块采样与跑道。
 - 若替换求解器，实现 `AerodynamicSimulator` 并在 `SimulationConfiguration` 中替换 Bean 即可，REST API 与前端无需变化。
 
 ### 风洞数据流
@@ -344,12 +360,13 @@ Three.js：压力着色、流线、发光粒子、场雾、来流箭头、剖面
 FlightWebSocketHandler → FlightMapper → AircraftDefinition
     ▼
 FlightSessionManager
-    ├─ 共享 WorldGenerator 生成的地形/跑道
+    ├─ 共享 WorldGenerator 生成的高度函数/跑道
     ├─ 60 Hz FlightDynamics.step(dt)
+    ├─ 根据飞机位置同步 512 m 区块（增删 + 半径限制）
     └─ 30 Hz 推送 FlightStateDto
     ▼
-FlightWorldScene：地形、跑道、飞机插值与相机
-FlightHud：空速、姿态、航向、高度、动力与告警
+FlightWorldScene：区块地形、跑道、飞机状态插值与相机
+FlightHud：飞行仪表、分层设色小地图、区块半径滑动条
 ```
 
 ## 风洞求解模型
@@ -451,11 +468,12 @@ FlightHud：空速、姿态、航向、高度、动力与告警
   },
   "bindings": {
     "throttleUp": "KeyW"
-  }
+  },
+  "chunkRadius": 3
 }
 ```
 
-服务器返回 `ready`，其中 `world` 包含高度场 Base64 数据、地形尺寸、跑道参数和起始位置；`state` 为初始遥测。
+服务器返回 `ready`，其中 `world` 包含区块尺寸/采样分辨率、初始区块列表、跑道参数、初始位置和加载半径；`state` 为初始遥测。每个区块包含 `chunkX`、`chunkZ`、高度场 Base64、海拔范围和主导地形类型。
 
 ### 输入与重置
 
@@ -465,6 +483,37 @@ FlightHud：空速、姿态、航向、高度、动力与告警
 
 ```json
 { "type": "reset" }
+```
+
+调整区块加载半径：
+
+```json
+{ "type": "chunkRadius", "value": 5 }
+```
+
+服务器会在边界变化或半径变化时推送区块增删消息：
+
+```json
+{
+  "type": "chunks",
+  "added": [
+    {
+      "chunkX": 2,
+      "chunkZ": -1,
+      "resolution": 65,
+      "originX": 1024,
+      "originZ": -512,
+      "sizeX": 512,
+      "sizeZ": 512,
+      "minHeight": 33.2,
+      "maxHeight": 71.8,
+      "biome": "HILLS",
+      "heights": "Base64 little-endian float32..."
+    }
+  ],
+  "removed": ["-2,-3"],
+  "chunkRadius": 5
+}
 ```
 
 按键代码为原始 `KeyboardEvent.code`，由服务器根据 `bindings` 解析为具体操纵通道。
@@ -508,7 +557,8 @@ FlightHud：空速、姿态、航向、高度、动力与告警
 - 模型表面网格与流场数组一致性；
 - 任意方向来流、风速与空气密度工况；
 - REST API 正常请求与非法模型错误响应；
-- 柏林地形确定性、高度连续性与跑道压平区域；
+- 柏林地形确定性、相邻区块边缘连续性与跑道压平区域；
+- 平原、丘陵、山地、高原四类地形均会在无限世界中生成；
 - 飞行器跑道起步、油门加速、抬头起飞、偏航侧倾；
 - 自定义按键绑定在核心动力学中的解析；
 - 飞行重置回到跑道起点。

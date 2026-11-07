@@ -172,9 +172,6 @@ public final class FlightDynamics {
             pitch = Math.toRadians(4);
             velocity = new Vec3(forwardX * speedMps, speedMps * Math.sin(pitch), forwardZ * speedMps);
         }
-        if (!world.inside(position.x(), position.z())) {
-            crash("已离开训练空域");
-        }
     }
 
     private void stepInAir(double dt) {
@@ -216,10 +213,6 @@ public final class FlightDynamics {
         double altitude = position.y() - ground;
         if (altitude <= GEAR_CLEARANCE) {
             handleGroundContact(ground);
-        }
-        if (!world.inside(position.x(), position.z())) {
-            outsideWorld = true;
-            crash("已离开训练空域");
         }
     }
 

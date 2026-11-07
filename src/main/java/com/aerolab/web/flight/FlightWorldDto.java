@@ -2,16 +2,17 @@ package com.aerolab.web.flight;
 
 import com.aerolab.web.dto.ModelDto;
 
+import java.util.List;
+
 public record FlightWorldDto(
-        int resolution,
-        double originX,
-        double originZ,
-        double sizeX,
-        double sizeZ,
-        double minHeight,
-        double maxHeight,
+        int chunkSize,
+        int chunkResolution,
         String heightEncoding,
-        String heights,
+        int chunkRadius,
+        int minChunkRadius,
+        int maxChunkRadius,
+        int loadedChunkCount,
+        List<TerrainChunkDto> chunks,
         RunwayDto runway,
         ModelDto.Vec3Dto start
 ) {

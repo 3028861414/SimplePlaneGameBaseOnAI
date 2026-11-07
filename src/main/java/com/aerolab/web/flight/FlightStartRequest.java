@@ -9,7 +9,8 @@ public record FlightStartRequest(
         String type,
         ModelDto model,
         FlightSystemsDto flightSystems,
-        Map<String, String> bindings
+        Map<String, String> bindings,
+        Integer chunkRadius
 ) {
 
     public record FlightSystemsDto(

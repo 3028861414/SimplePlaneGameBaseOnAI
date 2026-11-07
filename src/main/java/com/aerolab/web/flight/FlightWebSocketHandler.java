@@ -39,6 +39,10 @@ public class FlightWebSocketHandler extends TextWebSocketHandler {
                         node.path("pressed").asBoolean(false)
                 );
                 case "reset" -> sessionManager.resetSession(session);
+                case "chunkRadius" -> sessionManager.setChunkRadius(
+                        session,
+                        node.path("value").asInt(com.aerolab.core.world.WorldConfig.DEFAULT_CHUNK_RADIUS)
+                );
                 case "close" -> session.close(CloseStatus.NORMAL);
                 default -> sessionManager.sendError(session, "未知的飞行消息类型");
             }

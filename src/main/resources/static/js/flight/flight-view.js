@@ -8,6 +8,8 @@ import { FlightHud } from './flight-hud.js';
 const SERVER_CONTROL_ACTIONS = new Set([
   'throttleUp', 'throttleDown', 'pitchUp', 'pitchDown', 'yawLeft', 'yawRight', 'boost', 'brake'
 ]);
+const CHUNK_RADIUS_KEY = 'aerolab.flight.chunk-radius.v1';
+const DEFAULT_CHUNK_RADIUS = 3;
 
 export class FlightView {
   constructor({ container, overlay, headerActions, store, onExit }) {
@@ -19,6 +21,7 @@ export class FlightView {
     this._worldBuilt = false;
     this._pressedKeys = new Set();
     this._events = new AbortController();
+    this.chunkRadius = loadChunkRadius();
 
     this.scene = new FlightWorldScene(container, this.model);
     this.hud = new FlightHud(overlay, {
@@ -26,7 +29,8 @@ export class FlightView {
       onToggleCamera: () => this._toggleCamera(),
       onRestart: () => this._restart(),
       onExit: () => this.onExit?.(),
-      onRetry: () => this._connect()
+      onRetry: () => this._connect(),
+      onChunkRadiusChange: value => this._setChunkRadius(value)
     });
     this.hud.setCameraMode('third');
     this._renderHeader();
@@ -69,6 +73,7 @@ export class FlightView {
     this.socket = new FlightSocket({
       onReady: (world, state) => this._onReady(world, state),
       onState: state => this._onState(state),
+      onChunks: message => this._onChunks(message),
       onError: message => this._onSocketError(message),
       onClose: (code, reason) => this._onSocketClose(code, reason)
     });
@@ -79,20 +84,31 @@ export class FlightView {
         cockpit: this.model.cockpit
       },
       flightSystems: this.model.flightSystems,
-      bindings: this.model.bindings
+      bindings: this.model.bindings,
+      chunkRadius: this.chunkRadius
     });
   }
 
   _onReady(world, state) {
     if (this._disposed) return;
     this._ready = true;
+    this.chunkRadius = world.chunkRadius ?? this.chunkRadius;
     if (!this._worldBuilt) {
       this.scene.setWorld(world);
       this._worldBuilt = true;
+    } else {
+      this.scene.setChunkRadius(this.chunkRadius);
+      this.scene.replaceChunks(world.chunks);
     }
     this.scene.setInitialState(state);
+    this.hud.setChunkSettings({
+      radius: this.chunkRadius,
+      min: world.minChunkRadius,
+      max: world.maxChunkRadius,
+      chunkSize: world.chunkSize
+    });
     this.hud.hideLoading();
-    this.hud.update(state);
+    this.hud.update(state, this.scene.getMapData());
     this._setLinkState('实时飞行 · 30 Hz', 'live');
     this.hud.setNotice('滑行起飞：增加油门，达到起飞速度后抬头', { duration: 4200 });
     this.scene.viewport.resize();
@@ -101,7 +117,24 @@ export class FlightView {
   _onState(state) {
     if (this._disposed || !this._ready) return;
     this.scene.pushState(state);
-    this.hud.update(state);
+    this.hud.update(state, this.scene.getMapData());
+  }
+
+  _onChunks(message) {
+    if (this._disposed) return;
+    this.scene.applyChunkUpdate(message.added, message.removed);
+  }
+
+  _setChunkRadius(value) {
+    const radius = Math.max(2, Math.min(6, Number(value) || DEFAULT_CHUNK_RADIUS));
+    this.chunkRadius = radius;
+    try {
+      localStorage.setItem(CHUNK_RADIUS_KEY, String(radius));
+    } catch {
+      // Storage can be unavailable in private browsing; the runtime value still applies.
+    }
+    this.scene.setChunkRadius(radius);
+    this.socket?.setChunkRadius(radius);
   }
 
   _onSocketError(message) {
@@ -209,5 +242,16 @@ export class FlightView {
     this.scene.dispose();
     this.headerActions.replaceChildren();
     this.headerActions.onclick = null;
+  }
+}
+
+function loadChunkRadius() {
+  try {
+    const raw = localStorage.getItem(CHUNK_RADIUS_KEY);
+    if (raw === null || raw.trim() === '') return DEFAULT_CHUNK_RADIUS;
+    const stored = Number(raw);
+    return Number.isFinite(stored) ? Math.max(2, Math.min(6, Math.round(stored))) : DEFAULT_CHUNK_RADIUS;
+  } catch {
+    return DEFAULT_CHUNK_RADIUS;
   }
 }

@@ -11,7 +11,9 @@ import com.aerolab.core.flight.KeyBindings;
 import com.aerolab.core.geometry.Vec3;
 import com.aerolab.core.model.ModelValidator;
 import com.aerolab.core.model.VehicleModel;
+import com.aerolab.core.world.TerrainChunk;
 import com.aerolab.core.world.TerrainWorld;
+import com.aerolab.core.world.WorldConfig;
 import com.aerolab.web.BinaryEncoding;
 import com.aerolab.web.SimulationMapper;
 import com.aerolab.web.dto.ModelDto;
@@ -68,19 +70,19 @@ public final class FlightMapper {
         return new Vec3(value.x(), value.y(), value.z());
     }
 
-    public static FlightWorldDto toWorldDto(TerrainWorld world) {
+    public static FlightWorldDto toWorldDto(TerrainWorld world, List<TerrainChunk> chunks, int chunkRadius) {
         var runway = world.runway();
         var start = world.startPosition(1.42);
+        List<TerrainChunkDto> chunkDtos = chunks.stream().map(FlightMapper::toChunkDto).toList();
         return new FlightWorldDto(
-                world.resolution(),
-                world.originX(),
-                world.originZ(),
-                world.sizeX(),
-                world.sizeZ(),
-                world.minHeight(),
-                world.maxHeight(),
+                (int) WorldConfig.CHUNK_SIZE,
+                WorldConfig.CHUNK_RESOLUTION,
                 "base64-float32-le",
-                BinaryEncoding.encodeFloats(world.heights()),
+                chunkRadius,
+                WorldConfig.MIN_CHUNK_RADIUS,
+                WorldConfig.MAX_CHUNK_RADIUS,
+                chunkDtos.size(),
+                chunkDtos,
                 new FlightWorldDto.RunwayDto(
                         runway.centerX(),
                         runway.centerZ(),
@@ -90,6 +92,22 @@ public final class FlightMapper {
                         runway.headingRadians()
                 ),
                 new ModelDto.Vec3Dto(start.x(), start.y(), start.z())
+        );
+    }
+
+    public static TerrainChunkDto toChunkDto(TerrainChunk chunk) {
+        return new TerrainChunkDto(
+                chunk.chunkX(),
+                chunk.chunkZ(),
+                chunk.resolution(),
+                chunk.originX(),
+                chunk.originZ(),
+                chunk.sizeX(),
+                chunk.sizeZ(),
+                chunk.minHeight(),
+                chunk.maxHeight(),
+                chunk.dominantBiome().name(),
+                BinaryEncoding.encodeFloats(chunk.heights())
         );
     }
 }
