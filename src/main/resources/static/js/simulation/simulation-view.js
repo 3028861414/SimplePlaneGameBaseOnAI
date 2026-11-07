@@ -5,6 +5,7 @@ import { showToast, formatNumber } from '../core/ui.js';
 import { icon } from '../util/icons.js';
 import { pressureGradient, speedGradient } from '../util/color-map.js';
 import { FlowFieldData } from './flow-field.js';
+import { WindVectorGizmo } from './wind-vector-gizmo.js';
 import { SectionPlane } from './section-plane.js';
 import {
   FlowParticles,
@@ -57,6 +58,11 @@ export class SimulationView {
     this.scene.add(this.dynamicRoot);
 
     this._renderOverlay();
+    this.windGizmo = new WindVectorGizmo(
+      this.overlayHost.querySelector('[data-wind-gizmo]'),
+      this.settings.windDirection,
+      direction => this._onWindGizmoChange(direction)
+    );
     this._bindHeader();
     this._bindUI();
     this._bindCanvas();
@@ -98,6 +104,10 @@ export class SimulationView {
             <div class="sim-field__head">
               <span class="sim-field-label">来流方向向量</span>
               <output data-readout="windDirection">${directionLabel(this.settings.windDirection)}</output>
+            </div>
+            <div class="wind-vector-gizmo">
+              <canvas data-wind-gizmo width="320" height="170" aria-label="拖动箭头调整来流方向"></canvas>
+              <span>拖动橙色箭头头部调整方向</span>
             </div>
             <div class="wind-vector-grid">
               <label title="沿机体纵轴：负值来自机头，正值来自尾部">
@@ -205,7 +215,7 @@ export class SimulationView {
             <div class="sim-field__ticks"><span data-section-min>—</span><span data-section-max>—</span></div>
           </div>
 
-          <p class="section-caption">彩色切片为场数据，橙色轮廓为模型与剖面的交线。</p>
+          <p class="section-caption">彩色切片为场数据，橙色轮廓为模型与剖面的交线，灰色斜纹为实体截面。</p>
           <button class="cockpit-launch" type="button" data-action="cockpit" disabled>
             <span class="cockpit-launch__icon">${icon('camera', 19)}</span>
             <span><strong>进入驾驶舱视角</strong><small>使用建模阶段定义的相机</small></span>
@@ -449,6 +459,14 @@ export class SimulationView {
     }, { signal });
   }
 
+  _onWindGizmoChange(direction) {
+    this.settings.windDirection = { ...direction };
+    this._syncWindDirectionInputs();
+    this.dirty = true;
+    this._updateControlReadouts();
+    this._markDirty();
+  }
+
   _updateControlReadouts() {
     const windOutput = this.overlayHost.querySelector('[data-readout="windSpeed"]');
     const directionOutput = this.overlayHost.querySelector('[data-readout="windDirection"]');
@@ -458,6 +476,7 @@ export class SimulationView {
     directionOutput.textContent = directionLabel(this.settings.windDirection);
     directionOutput.dataset.state = isNonZeroVector(this.settings.windDirection) ? 'valid' : 'error';
     densityOutput.textContent = `${formatNumber(this.settings.airDensity, 3)} kg/m³`;
+    this.windGizmo?.setDirection(this.settings.windDirection);
     this.overlayHost.querySelectorAll('.range-input[data-control]').forEach(input => {
       const min = Number(input.min);
       const max = Number(input.max);

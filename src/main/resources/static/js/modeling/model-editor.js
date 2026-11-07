@@ -48,6 +48,11 @@ export class ModelEditor {
     this._capturingBinding = null;
     this._disposed = false;
     this._events = new AbortController();
+    this._undoStack = [];
+    this._redoStack = [];
+    this._historyLastAt = 0;
+    this._historyCoalesceMs = 420;
+    this._applyingHistory = false;
 
     this.viewport = new Viewport(container);
     this.scene = this.viewport.scene;
@@ -70,6 +75,7 @@ export class ModelEditor {
     this._buildTransformControls();
     this._buildCockpitMarker();
     this._renderOverlay();
+    this._updateHistoryButtons();
     this._bindHeader();
     this._bindOverlay();
     this._bindKeyboard();
@@ -93,6 +99,7 @@ export class ModelEditor {
     this.transform.setSpace('world');
     this.transform.addEventListener('dragging-changed', event => {
       this.viewport.controls.enabled = !event.value && !this.previewActive;
+      if (event.value) this._recordHistory(true);
       if (!event.value) {
         this._commitNow();
       }
@@ -179,6 +186,9 @@ export class ModelEditor {
             <div class="scene-tools">
               <button class="icon-btn" type="button" data-action="import-aircraft" title="导入飞机 JSON">${icon('upload', 15)}</button>
               <button class="icon-btn" type="button" data-action="export-aircraft" title="导出飞机 JSON">${icon('download', 15)}</button>
+              <button class="icon-btn" type="button" data-action="undo" title="撤销 (Ctrl+Z)" disabled>${icon('undo', 15)}</button>
+              <button class="icon-btn" type="button" data-action="redo" title="重做 (Ctrl+Shift+Z)" disabled>${icon('redo', 15)}</button>
+              <button class="icon-btn icon-btn--danger" type="button" data-action="clear" title="清空全部部件">${icon('trash', 15)}</button>
               <button class="icon-btn" type="button" data-action="reset" title="一键恢复默认飞机模型">${icon('reset', 15)}</button>
             </div>
           </div>
@@ -254,6 +264,8 @@ export class ModelEditor {
       pickBanner: this.overlayHost.querySelector('[data-pick-banner]'),
       preview: this.overlayHost.querySelector('[data-cockpit-preview]'),
       importInput: this.overlayHost.querySelector('[data-import-input]'),
+      undoButton: this.overlayHost.querySelector('[data-action="undo"]'),
+      redoButton: this.overlayHost.querySelector('[data-action="redo"]'),
       saveStatus: null
     };
   }
@@ -391,6 +403,7 @@ export class ModelEditor {
         event.stopPropagation();
         if (event.key !== 'Escape') {
           const action = this._capturingBinding;
+          this._recordHistory(true);
           this.model.bindings[action] = event.code;
           this._capturingBinding = null;
           this._renderInspector();
@@ -403,6 +416,20 @@ export class ModelEditor {
         return;
       }
       const typing = event.target.matches('input, textarea, select, [contenteditable="true"]');
+      if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+        const shortcut = event.key.toLowerCase();
+        if (shortcut === 'z') {
+          event.preventDefault();
+          if (event.shiftKey) this.redo();
+          else this.undo();
+          return;
+        }
+        if (shortcut === 'y') {
+          event.preventDefault();
+          this.redo();
+          return;
+        }
+      }
       if (event.key === 'Escape') {
         if (this.previewActive) {
           this._exitPreview();
@@ -512,6 +539,15 @@ export class ModelEditor {
       case 'reset':
         this._resetToDemo();
         break;
+      case 'undo':
+        this.undo();
+        break;
+      case 'redo':
+        this.redo();
+        break;
+      case 'clear':
+        this.clearParts();
+        break;
       case 'fit':
         this.fitView();
         break;
@@ -540,6 +576,7 @@ export class ModelEditor {
         this._exportAircraft();
         break;
       case 'reset-bindings':
+        this._recordHistory(true);
         this.model.bindings = createDefaultBindings();
         this._renderInspector();
         this._commitNow();
@@ -552,6 +589,7 @@ export class ModelEditor {
 
   _handleFieldInput(event) {
     const input = event.target;
+    this._recordHistory(false);
     if (input.matches('[data-model-name]')) {
       this.model.name = input.value;
       this._scheduleCommit();
@@ -666,6 +704,7 @@ export class ModelEditor {
   _setPartColor(color, commit = true) {
     const part = this.selectedPart();
     if (!part) return;
+    this._recordHistory(commit);
     part.color = color;
     const group = this.partGroups.get(part.id);
     if (group?.userData.mesh?.material) {
@@ -678,6 +717,65 @@ export class ModelEditor {
     });
     this._updatePartRow(part);
     if (commit) this._commitNow();
+  }
+
+  _recordHistory(force = false) {
+    if (this._applyingHistory || this.previewActive) return;
+    const now = performance.now();
+    if (!force && now - this._historyLastAt < this._historyCoalesceMs) return;
+    this._undoStack.push(structuredClone(this.model));
+    if (this._undoStack.length > 80) this._undoStack.shift();
+    this._redoStack.length = 0;
+    this._historyLastAt = now;
+    this._updateHistoryButtons();
+  }
+
+  _updateHistoryButtons() {
+    if (this.ui?.undoButton) this.ui.undoButton.disabled = this._undoStack.length === 0;
+    if (this.ui?.redoButton) this.ui.redoButton.disabled = this._redoStack.length === 0;
+  }
+
+  undo() {
+    if (this._undoStack.length === 0) return;
+    this._redoStack.push(structuredClone(this.model));
+    const previous = this._undoStack.pop();
+    this._restoreHistory(previous);
+    showToast('已撤销上一步编辑。', { type: 'info', duration: 1500 });
+  }
+
+  redo() {
+    if (this._redoStack.length === 0) return;
+    this._undoStack.push(structuredClone(this.model));
+    const next = this._redoStack.pop();
+    this._restoreHistory(next);
+    showToast('已重做编辑。', { type: 'info', duration: 1500 });
+  }
+
+  _restoreHistory(snapshot) {
+    this._applyingHistory = true;
+    this._exitPreview();
+    this._cancelPick();
+    this._capturingBinding = null;
+    this.model = structuredClone(snapshot);
+    this.store.replace(this.model, 'edit');
+    this.ui.modelName.value = this.model.name;
+    this._rebuildScene();
+    this._updateSystemMarkers();
+    this._renderInspector();
+    this._updateHistoryButtons();
+    this._setSaveStatus('已撤销 / 重做', 'saved');
+    this._historyLastAt = 0;
+    this._applyingHistory = false;
+  }
+
+  clearParts() {
+    if (this.model.parts.length === 0) return;
+    this._recordHistory(true);
+    this.model.parts = [];
+    this.selectedId = null;
+    this._rebuildScene();
+    this._commitNow();
+    showToast('已清空全部部件，可使用 Ctrl+Z 撤销。', { type: 'success' });
   }
 
   _scheduleCommit() {
@@ -1212,6 +1310,7 @@ export class ModelEditor {
       showToast(`${meta.label}数量已达到上限。`, { type: 'error' });
       return;
     }
+    this._recordHistory(true);
     const anchor = this.selectedPart()?.position ?? { x: 0, y: 0, z: 0 };
     const item = {
       id: uid(meta.prefix),
@@ -1239,6 +1338,7 @@ export class ModelEditor {
   _removeFlightSystem(group, id) {
     const items = this.model.flightSystems[group];
     if (!Array.isArray(items)) return;
+    this._recordHistory(true);
     const removed = items.find(item => item.id === id);
     this.model.flightSystems[group] = items.filter(item => item.id !== id);
     this._updateSystemMarkers();
@@ -1325,6 +1425,7 @@ export class ModelEditor {
       this._cancelPick();
       this._capturingBinding = null;
       this.inspectorTab = 'assembly';
+      this._recordHistory(true);
       this.model = imported;
       this.store.replace(imported, 'import');
       this.selectedId = null;
@@ -1424,6 +1525,7 @@ export class ModelEditor {
     }
     const info = SHAPE_INFO[shape];
     if (!info) return;
+    this._recordHistory(true);
     const target = this.viewport.controls.target;
     const count = this.model.parts.filter(part => part.shape === shape).length + 1;
     const part = createPart(shape, {
@@ -1449,6 +1551,7 @@ export class ModelEditor {
       showToast('已达到 80 个部件的上限。', { type: 'error' });
       return;
     }
+    this._recordHistory(true);
     const copy = structuredClone(source);
     copy.id = uid('part');
     copy.name = `${source.name} 副本`;
@@ -1463,6 +1566,7 @@ export class ModelEditor {
   deleteSelected() {
     const part = this.selectedPart();
     if (!part) return;
+    this._recordHistory(true);
     this.model.parts = this.model.parts.filter(item => item.id !== part.id);
     this.selectedId = null;
     this._rebuildScene();
@@ -1471,6 +1575,7 @@ export class ModelEditor {
   }
 
   _resetToDemo() {
+    this._recordHistory(true);
     this._exitPreview();
     this._cancelPick();
     this.store.resetToDemo();
@@ -1524,6 +1629,7 @@ export class ModelEditor {
       normal = new THREE.Vector3(0, 1, 0);
     }
     const position = hit.point.clone().addScaledVector(normal, 0.04);
+    this._recordHistory(true);
     this.model.cockpit.position = {
       x: round(position.x),
       y: round(position.y),

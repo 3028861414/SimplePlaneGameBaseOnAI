@@ -5086,3 +5086,164 @@ input[type="color"]::-webkit-color-swatch {
   .fph-readout--speed { left: 8%; justify-content: flex-start; }
   .fph-readout--altitude { right: 8%; justify-content: flex-end; }
 }
+
+.wind-vector-gizmo {
+  position: relative;
+  margin: 0 0 8px;
+  overflow: hidden;
+  border: 1px solid rgba(149, 205, 215, 0.1);
+  border-radius: 7px;
+  background:
+    radial-gradient(circle at 50% 56%, rgba(88, 224, 199, 0.1), transparent 56%),
+    rgba(2, 9, 13, 0.46);
+}
+
+.wind-vector-gizmo canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 320 / 170;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.wind-vector-gizmo canvas.is-dragging {
+  cursor: grabbing;
+}
+
+.wind-vector-gizmo > span {
+  position: absolute;
+  left: 8px;
+  bottom: 4px;
+  color: #587b80;
+  font-size: 7px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+.flight-options-note {
+  margin: 0;
+  color: #658487;
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.engine-core {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 11px;
+  width: 100%;
+}
+
+.engine-core .throttle-ring {
+  width: 94px;
+  height: 94px;
+}
+
+.engine-rack {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 6px;
+  height: 100px;
+}
+
+.engine-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  width: 26px;
+}
+
+.engine-column__track {
+  position: relative;
+  pointer-events: auto;
+  width: 15px;
+  height: 76px;
+  border: 1px solid rgba(157, 216, 214, 0.22);
+  border-radius: 99px;
+  background: rgba(3, 15, 20, 0.72);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.35);
+  cursor: ns-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.engine-column__track:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(88, 224, 199, 0.22);
+}
+
+.engine-column__track i {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  bottom: 3px;
+  height: 0%;
+  border-radius: 99px;
+  background: linear-gradient(to top, rgba(88, 224, 199, 0.48), var(--accent));
+  box-shadow: 0 0 9px rgba(88, 224, 199, 0.25);
+  transition: height 70ms linear;
+}
+
+.engine-column__track b {
+  position: absolute;
+  left: 50%;
+  bottom: -3px;
+  width: 19px;
+  height: 6px;
+  border: 1px solid rgba(188, 245, 231, 0.5);
+  border-radius: 2px;
+  background: #bdece1;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  transform: translateX(-50%);
+  transition: bottom 70ms linear;
+}
+
+.engine-column > span {
+  color: #c3e4de;
+  font-family: var(--mono);
+  font-size: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.engine-column > small {
+  color: #587a7c;
+  font-family: var(--mono);
+  font-size: 6px;
+  letter-spacing: 0.08em;
+}
+
+@media (max-width: 1000px) {
+  .engine-core {
+    gap: 6px;
+  }
+
+  .engine-core .throttle-ring {
+    width: 78px;
+    height: 78px;
+  }
+
+  .engine-rack {
+    height: 86px;
+    gap: 4px;
+  }
+
+  .engine-column__track {
+    height: 64px;
+  }
+
+  .engine-column {
+    width: 23px;
+  }
+}
+
+.sim-conditions {
+  max-height: calc(100% - 300px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(88, 224, 199, 0.22) transparent;
+}

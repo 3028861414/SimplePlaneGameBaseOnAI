@@ -49,7 +49,9 @@ export function icon(name, size = 18) {
     upload: '<path d="M11 15V4.8L7.4 8.4 6 7l6-6 6 6-1.4 1.4L13 4.8V15h-2Zm-7 2h2v3h12v-3h2v5H4v-5Z"/>',
     download: '<path d="M11 2h2v10.2l3.6-3.6L18 10l-6 6-6-6 1.4-1.4 3.6 3.6V2ZM4 17h2v3h12v-3h2v5H4v-5Z"/>',
     check: '<path d="M9.2 16.2 3.8 10.8l1.4-1.4 4 4L16.8 5.8l1.4 1.4-9 9Z"/>',
-    sliders: '<path d="M4 5h16v2H4V5Zm0 6h16v2H4v-2Zm0 6h16v2H4v-2Z"/><circle cx="8" cy="6" r="2.2"/><circle cx="16" cy="12" r="2.2"/><circle cx="10" cy="18" r="2.2"/>'
+    sliders: '<path d="M4 5h16v2H4V5Zm0 6h16v2H4v-2Zm0 6h16v2H4v-2Z"/><circle cx="8" cy="6" r="2.2"/><circle cx="16" cy="12" r="2.2"/><circle cx="10" cy="18" r="2.2"/>',
+    undo: '<path d="M9 5 3 11l6 6 1.4-1.4-3.6-3.6H15a4 4 0 1 1 0 8h-3v2h3a6 6 0 1 0 0-12H6.8l3.6-3.6L9 5Z"/>',
+    redo: '<path d="m15 5 6 6-6 6-1.4-1.4 3.6-3.6H9a4 4 0 1 0 0 8h3v2H9a6 6 0 1 1 0-12h8.2l-3.6-3.6L15 5Z"/>'
   };
   return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor">${paths[name] ?? ''}</svg>`;
 }

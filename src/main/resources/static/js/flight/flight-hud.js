@@ -51,20 +51,17 @@ export class FlightHud {
     const bindings = this.model.bindings;
     const engines = this.model.flightSystems?.engines ?? [];
     const engineCount = engines.length;
-    const engineRows = engines.map(engine => `
-      <div class="engine-throttle-row">
-        <div class="engine-throttle-row__head">
-          <span>${escapeHtml(engine.name || engine.id)}</span>
-          <output data-engine-percent="${escapeHtml(engine.id)}">0%</output>
+    const engineColumns = engines.map((engine, index) => `
+      <div class="engine-column" data-engine-column="${escapeHtml(engine.id)}" title="${escapeHtml(engine.name || engine.id)}">
+        <div class="engine-column__track" data-engine-track="${escapeHtml(engine.id)}"
+             role="slider" tabindex="0" aria-label="${escapeHtml(engine.name || engine.id)} 推力百分比"
+             aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <i data-engine-fill="${escapeHtml(engine.id)}"></i>
+          <b data-engine-thumb="${escapeHtml(engine.id)}"></b>
         </div>
-        <input type="range" min="0" max="100" step="1" value="0"
-               data-engine-throttle="${escapeHtml(engine.id)}" aria-label="${escapeHtml(engine.name || engine.id)} 推力百分比">
+        <span data-engine-column-value="${escapeHtml(engine.id)}">0%</span>
+        <small>E${index + 1}</small>
       </div>
-    `).join('');
-    const engineReadouts = engines.map(engine => `
-      <span class="engine-readout" data-engine-readout="${escapeHtml(engine.id)}">
-        <i></i><b data-engine-readout-name>${escapeHtml(engine.name || engine.id)}</b><strong data-engine-readout-value>0%</strong>
-      </span>
     `).join('');
     this.overlayHost.innerHTML = `
       <div class="flight-ui is-loading">
@@ -122,13 +119,7 @@ export class FlightHud {
             <i></i>
           </label>
           <div class="flight-options-divider"></div>
-          <div class="flight-options-subhead">
-            <span>引擎推力</span>
-            <small>每台独立设置</small>
-          </div>
-          <div class="engine-throttle-list">
-            ${engineRows || '<p class="option-empty">未配置引擎</p>'}
-          </div>
+          <p class="flight-options-note">每台引擎的独立推力百分比已移至下方仪表盘的竖直推力条；也可在座舱视角直接拖动竖条。</p>
         </section>
 
         <aside class="flight-map-panel">
@@ -250,11 +241,14 @@ export class FlightHud {
           </div>
 
           <div class="instrument instrument--engine">
-            <div class="throttle-ring" data-throttle-ring>
-              <div class="throttle-ring__inside">
-                <strong data-throttle>0</strong><small>%</small>
-                <span>THR</span>
+            <div class="engine-core">
+              <div class="throttle-ring" data-throttle-ring>
+                <div class="throttle-ring__inside">
+                  <strong data-throttle>0</strong><small>%</small>
+                  <span>THR</span>
+                </div>
               </div>
+              ${engineColumns ? `<div class="engine-rack">${engineColumns}</div>` : ''}
             </div>
             <div class="engine-meta">
               <span>推力</span>
@@ -262,7 +256,6 @@ export class FlightHud {
               <div class="engine-lights">
                 ${Array.from({ length: Math.max(1, engineCount) }, () => '<i></i>').join('')}
               </div>
-              ${engineReadouts ? `<div class="engine-throttles">${engineReadouts}</div>` : ''}
               <span class="g-load">G <b data-gload>1.0</b></span>
               <span class="g-load">AOA <b data-aoa>0°</b></span>
               <span class="g-load">LIFT <b data-lift>0 kN</b></span>
@@ -350,8 +343,7 @@ export class FlightHud {
       airflowToggle: this.overlayHost.querySelector('[data-airflow-toggle]'),
       firstPersonHudToggle: this.overlayHost.querySelector('[data-first-person-hud-toggle]'),
       weatherToggle: this.overlayHost.querySelector('[data-weather-toggle]'),
-      engineSliders: [...this.overlayHost.querySelectorAll('[data-engine-throttle]')],
-      engineReadouts: [...this.overlayHost.querySelectorAll('[data-engine-readout]')],
+      engineTracks: [...this.overlayHost.querySelectorAll('[data-engine-track]')],
       firstPersonHud: this.overlayHost.querySelector('[data-first-person-hud]'),
       fphWorld: this.overlayHost.querySelector('[data-fph-world]'),
       fphSpeed: this.overlayHost.querySelector('[data-fph-speed]'),
@@ -436,12 +428,44 @@ export class FlightHud {
       this.setFirstPersonHudEnabled(this.ui.firstPersonHudToggle.checked);
       this.onFirstPersonHudChange?.(this.firstPersonHudEnabled);
     });
-    for (const slider of this.ui.engineSliders) {
-      slider.addEventListener('input', () => {
-        const percent = Number(slider.value) || 0;
-        const output = slider.closest('.engine-throttle-row')?.querySelector('[data-engine-percent]');
-        if (output) output.textContent = `${Math.round(percent)}%`;
-        this.onEngineThrottle?.(slider.dataset.engineThrottle, percent / 100);
+    for (const track of this.ui.engineTracks) {
+      const apply = clientY => {
+        const rect = track.getBoundingClientRect();
+        const value = Math.max(0, Math.min(1, (rect.bottom - clientY) / Math.max(rect.height, 1)));
+        this._engineDrag = { id: track.dataset.engineTrack, pointerId: this._engineDrag?.pointerId };
+        this._setEngineColumn(track.dataset.engineTrack, value);
+        this.onEngineThrottle?.(track.dataset.engineTrack, value);
+      };
+      track.addEventListener('pointerdown', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        this._engineDrag = { id: track.dataset.engineTrack, pointerId: event.pointerId };
+        track.setPointerCapture?.(event.pointerId);
+        apply(event.clientY);
+      });
+      track.addEventListener('pointermove', event => {
+        if (this._engineDrag?.id !== track.dataset.engineTrack) return;
+        event.preventDefault();
+        apply(event.clientY);
+      });
+      const release = event => {
+        if (this._engineDrag?.id !== track.dataset.engineTrack) return;
+        this._engineDrag = null;
+        try { track.releasePointerCapture?.(event.pointerId); } catch { /* already released */ }
+      };
+      track.addEventListener('pointerup', release);
+      track.addEventListener('pointercancel', release);
+      track.addEventListener('keydown', event => {
+        const current = Number(track.getAttribute('aria-valuenow')) / 100;
+        let next = current;
+        if (event.key === 'ArrowUp' || event.key === 'ArrowRight') next = Math.min(1, current + 0.05);
+        else if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') next = Math.max(0, current - 0.05);
+        else if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = 1;
+        else return;
+        event.preventDefault();
+        this._setEngineColumn(track.dataset.engineTrack, next);
+        this.onEngineThrottle?.(track.dataset.engineTrack, next);
       });
     }
   }
@@ -482,6 +506,20 @@ export class FlightHud {
         this.ui.notice.classList.remove('is-visible');
       }, duration);
     }
+  }
+
+  _setEngineColumn(engineId, throttle) {
+    const value = Math.max(0, Math.min(1, Number(throttle) || 0));
+    const percent = Math.round(value * 100);
+    const id = CSS.escape(engineId);
+    const fill = this.overlayHost.querySelector(`[data-engine-fill="${id}"]`);
+    const thumb = this.overlayHost.querySelector(`[data-engine-thumb="${id}"]`);
+    const valueLabel = this.overlayHost.querySelector(`[data-engine-column-value="${id}"]`);
+    const track = this.overlayHost.querySelector(`[data-engine-track="${id}"]`);
+    if (fill) fill.style.height = `${percent}%`;
+    if (thumb) thumb.style.bottom = `calc(${percent}% - 3px)`;
+    if (valueLabel) valueLabel.textContent = `${percent}%`;
+    if (track) track.setAttribute('aria-valuenow', String(percent));
   }
 
   setCameraMode(mode) {
@@ -554,14 +592,8 @@ export class FlightHud {
       light.style.opacity = String(0.18 + engineThrottle * 0.82);
     });
     for (const engine of engineStates) {
-      const percent = Math.round(engine.throttle * 100);
-      const id = CSS.escape(engine.id);
-      const slider = this.ui.engineSliders.find(item => item.dataset.engineThrottle === engine.id);
-      if (slider && document.activeElement !== slider) slider.value = String(percent);
-      const output = this.overlayHost.querySelector(`[data-engine-percent="${id}"]`);
-      if (output) output.textContent = `${percent}%`;
-      const readout = this.overlayHost.querySelector(`[data-engine-readout="${id}"] [data-engine-readout-value]`);
-      if (readout) readout.textContent = `${percent}%`;
+      if (this._engineDrag?.id === engine.id) continue;
+      this._setEngineColumn(engine.id, engine.throttle);
     }
     if (this.ui.weatherState) {
       const windSpeed = Math.hypot(

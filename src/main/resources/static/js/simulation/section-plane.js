@@ -29,8 +29,8 @@ export class SectionPlane {
     this.texture = null;
     this.material = new THREE.MeshBasicMaterial({
       transparent: true,
-      opacity: 0.78,
-      alphaTest: 0.015,
+      opacity: 0.86,
+      alphaTest: 0.01,
       side: THREE.DoubleSide,
       depthWrite: false,
       toneMapped: false
@@ -162,6 +162,7 @@ export class SectionPlane {
     const height = Math.max(MIN_TEXTURE_EDGE, Math.min(MAX_TEXTURE_EDGE, Math.round(vExtent * scale)));
     const data = new Uint8Array(width * height * 4);
     const normValues = new Float32Array(width * height).fill(Number.NaN);
+    const validMask = new Uint8Array(width * height);
     const array = this.metric === 'speed' ? this.field.speed : this.field.cp;
     const fallback = this.metric === 'speed' ? speedColor(0) : pressureColor(0.5);
 
@@ -178,7 +179,7 @@ export class SectionPlane {
           data[pixel] = Math.round(fallback[0]);
           data[pixel + 1] = Math.round(fallback[1]);
           data[pixel + 2] = Math.round(fallback[2]);
-          data[pixel + 3] = 36;
+          data[pixel + 3] = 0;
           continue;
         }
         const norm = this.metric === 'speed'
@@ -188,6 +189,7 @@ export class SectionPlane {
               0, 1
             );
         normValues[py * width + px] = norm;
+        validMask[py * width + px] = 1;
         const rgb = this.metric === 'speed' ? speedColor(norm) : pressureColor(norm);
         data[pixel] = Math.round(rgb[0]);
         data[pixel + 1] = Math.round(rgb[1]);
@@ -197,6 +199,9 @@ export class SectionPlane {
     }
 
     this._drawContours(data, normValues, width, height);
+    this._bleedInvalidColors(data, validMask, width, height, fallback);
+    this._fillEnclosedHoles(data, validMask, width, height);
+    this._applySoftEdgeMask(data, validMask, width, height);
     this.material.map?.dispose();
     this.texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
     this.texture.flipY = false;
@@ -206,6 +211,126 @@ export class SectionPlane {
     this.texture.needsUpdate = true;
     this.material.map = this.texture;
     this.material.needsUpdate = true;
+  }
+
+  _bleedInvalidColors(data, validMask, width, height, fallback) {
+    const colorMask = validMask.slice();
+    const neighbors = [-1, 1, -width, width];
+    for (let pass = 0; pass < 4; pass++) {
+      let changed = false;
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const index = y * width + x;
+          if (colorMask[index]) continue;
+          let source = -1;
+          for (const offset of neighbors) {
+            const next = index + offset;
+            if (Math.abs(offset) === 1 && Math.floor(next / width) !== y) continue;
+            if (next >= 0 && next < colorMask.length && colorMask[next]) {
+              source = next;
+              break;
+            }
+          }
+          if (source < 0) continue;
+          const pixel = index * 4;
+          const sourcePixel = source * 4;
+          data[pixel] = data[sourcePixel];
+          data[pixel + 1] = data[sourcePixel + 1];
+          data[pixel + 2] = data[sourcePixel + 2];
+          data[pixel + 3] = 0;
+          colorMask[index] = 1;
+          changed = true;
+        }
+      }
+      if (!changed) break;
+    }
+    for (let index = 0; index < colorMask.length; index++) {
+      if (colorMask[index]) continue;
+      const pixel = index * 4;
+      data[pixel] = Math.round(fallback[0]);
+      data[pixel + 1] = Math.round(fallback[1]);
+      data[pixel + 2] = Math.round(fallback[2]);
+      data[pixel + 3] = 0;
+    }
+  }
+
+  _fillEnclosedHoles(data, validMask, width, height) {
+    const visited = new Uint8Array(validMask.length);
+    const component = [];
+    const queue = [];
+    const total = width * height;
+
+    for (let start = 0; start < total; start++) {
+      if (validMask[start] || visited[start]) continue;
+      component.length = 0;
+      queue.length = 0;
+      queue.push(start);
+      visited[start] = 1;
+      let touchesEdge = false;
+
+      for (let head = 0; head < queue.length; head++) {
+        const index = queue[head];
+        component.push(index);
+        const x = index % width;
+        const y = Math.floor(index / width);
+        if (x === 0 || y === 0 || x === width - 1 || y === height - 1) touchesEdge = true;
+
+        if (x > 0) this._enqueueMasked(validMask, visited, queue, index - 1);
+        if (x < width - 1) this._enqueueMasked(validMask, visited, queue, index + 1);
+        if (y > 0) this._enqueueMasked(validMask, visited, queue, index - width);
+        if (y < height - 1) this._enqueueMasked(validMask, visited, queue, index + width);
+      }
+
+      if (touchesEdge) continue;
+      for (const index of component) {
+        const x = index % width;
+        const y = Math.floor(index / width);
+        const pixel = index * 4;
+        const hatch = (x + y) % 14 < 3;
+        data[pixel] = hatch ? 92 : 132;
+        data[pixel + 1] = hatch ? 112 : 150;
+        data[pixel + 2] = hatch ? 118 : 154;
+        data[pixel + 3] = 240;
+        validMask[index] = 1;
+      }
+    }
+  }
+
+  _enqueueMasked(validMask, visited, queue, index) {
+    if (validMask[index] || visited[index]) return;
+    visited[index] = 1;
+    queue.push(index);
+  }
+
+  _applySoftEdgeMask(data, validMask, width, height) {
+    const shortEdge = Math.max(1, Math.min(width, height));
+    const feather = Math.max(2, Math.min(18, Math.round(shortEdge * 0.08)));
+    const radius = shortEdge * 0.24;
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const index = y * width + x;
+        if (!validMask[index]) {
+          data[index * 4 + 3] = 0;
+          continue;
+        }
+        const edgeDistance = Math.min(x, y, width - 1 - x, height - 1 - y);
+        let alpha = smoothstep(0, feather, edgeDistance);
+
+        if (x < radius && y < radius) {
+          alpha *= 1 - smoothstep(radius - feather, radius, Math.hypot(x - radius, y - radius));
+        } else if (x >= width - radius && y < radius) {
+          alpha *= 1 - smoothstep(radius - feather, radius, Math.hypot(x - (width - 1 - radius), y - radius));
+        } else if (x < radius && y >= height - radius) {
+          alpha *= 1 - smoothstep(radius - feather, radius, Math.hypot(x - radius, y - (height - 1 - radius)));
+        } else if (x >= width - radius && y >= height - radius) {
+          alpha *= 1 - smoothstep(radius - feather, radius,
+            Math.hypot(x - (width - 1 - radius), y - (height - 1 - radius)));
+        }
+
+        data[index * 4 + 3] = Math.round(235 * alpha);
+      }
+    }
   }
 
   _drawContours(data, values, width, height) {
@@ -297,6 +422,11 @@ export class SectionPlane {
     this.outlineGeometry.dispose();
     this.outline.material.dispose();
   }
+}
+
+function smoothstep(edge0, edge1, value) {
+  const t = THREE.MathUtils.clamp((value - edge0) / Math.max(edge1 - edge0, 1e-6), 0, 1);
+  return t * t * (3 - 2 * t);
 }
 
 function addEdgeIntersection(points, da, db, a, b) {
