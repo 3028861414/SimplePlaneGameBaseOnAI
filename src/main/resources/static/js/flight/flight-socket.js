@@ -82,6 +82,14 @@ export class FlightSocket {
     this._send({ type: 'chunkRadius', value });
   }
 
+  setEngineThrottle(engineId, value) {
+    this._send({ type: 'engineThrottle', engineId, value });
+  }
+
+  setWeather(enabled) {
+    this._send({ type: 'weather', enabled });
+  }
+
   disconnect() {
     clearTimeout(this._readyTimer);
     if (!this.ws) return;

@@ -7,7 +7,21 @@ import { biomeLabel } from './terrain-style.js';
 const CARDINALS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
 export class FlightHud {
-  constructor(overlayHost, { model, onToggleCamera, onRestart, onExit, onRetry, onChunkRadiusChange }) {
+  constructor(overlayHost, {
+    model,
+    onToggleCamera,
+    onRestart,
+    onExit,
+    onRetry,
+    onChunkRadiusChange,
+    onAirflowChange,
+    onWeatherChange,
+    onFirstPersonHudChange,
+    onEngineThrottle,
+    initialAirflow = true,
+    initialWeather = false,
+    initialFirstPersonHud = true
+  }) {
     this.overlayHost = overlayHost;
     this.model = model;
     this.onToggleCamera = onToggleCamera;
@@ -15,6 +29,13 @@ export class FlightHud {
     this.onExit = onExit;
     this.onRetry = onRetry;
     this.onChunkRadiusChange = onChunkRadiusChange;
+    this.onAirflowChange = onAirflowChange;
+    this.onWeatherChange = onWeatherChange;
+    this.onFirstPersonHudChange = onFirstPersonHudChange;
+    this.onEngineThrottle = onEngineThrottle;
+    this.airflowEnabled = Boolean(initialAirflow);
+    this.weatherEnabled = Boolean(initialWeather);
+    this.firstPersonHudEnabled = Boolean(initialFirstPersonHud);
     this._chunkSize = 512;
     this.cameraMode = 'third';
     this._lastPhase = '';
@@ -28,7 +49,23 @@ export class FlightHud {
 
   _build() {
     const bindings = this.model.bindings;
-    const engineCount = this.model.flightSystems?.engines?.length ?? 0;
+    const engines = this.model.flightSystems?.engines ?? [];
+    const engineCount = engines.length;
+    const engineRows = engines.map(engine => `
+      <div class="engine-throttle-row">
+        <div class="engine-throttle-row__head">
+          <span>${escapeHtml(engine.name || engine.id)}</span>
+          <output data-engine-percent="${escapeHtml(engine.id)}">0%</output>
+        </div>
+        <input type="range" min="0" max="100" step="1" value="0"
+               data-engine-throttle="${escapeHtml(engine.id)}" aria-label="${escapeHtml(engine.name || engine.id)} 推力百分比">
+      </div>
+    `).join('');
+    const engineReadouts = engines.map(engine => `
+      <span class="engine-readout" data-engine-readout="${escapeHtml(engine.id)}">
+        <i></i><b data-engine-readout-name>${escapeHtml(engine.name || engine.id)}</b><strong data-engine-readout-value>0%</strong>
+      </span>
+    `).join('');
     this.overlayHost.innerHTML = `
       <div class="flight-ui is-loading">
         <div class="flight-topbar">
@@ -51,12 +88,48 @@ export class FlightHud {
           </div>
 
           <div class="flight-top-actions">
+            <button class="flight-chip-btn" type="button" data-hud-options aria-expanded="false">
+              ${icon('sliders', 15)}<span>设置</span>
+            </button>
             <button class="flight-chip-btn" type="button" data-hud-camera>
               ${icon('camera', 15)}<span data-camera-label>${this._cameraHint}</span>
             </button>
             <button class="flight-chip-btn" type="button" data-hud-exit>${icon('back', 14)} 返回建模</button>
           </div>
         </div>
+
+        <section class="flight-options-panel" data-hud-options-panel hidden>
+          <div class="flight-options-head">
+            <div>
+              <div class="panel-kicker">Flight Options</div>
+              <h3>显示与动力</h3>
+            </div>
+            <button type="button" class="icon-btn" data-hud-options-close title="关闭">×</button>
+          </div>
+          <label class="option-switch">
+            <span><b>空气粒子</b><small>显示飞机周围的气流轨迹</small></span>
+            <input type="checkbox" data-airflow-toggle ${this.airflowEnabled ? 'checked' : ''}>
+            <i></i>
+          </label>
+          <label class="option-switch">
+            <span><b>第一人称 HUD</b><small>水平仪、速度、高度与航向</small></span>
+            <input type="checkbox" data-first-person-hud-toggle ${this.firstPersonHudEnabled ? 'checked' : ''}>
+            <i></i>
+          </label>
+          <label class="option-switch">
+            <span><b>天气与风</b><small>降雨、阵风与湍流影响</small></span>
+            <input type="checkbox" data-weather-toggle ${this.weatherEnabled ? 'checked' : ''}>
+            <i></i>
+          </label>
+          <div class="flight-options-divider"></div>
+          <div class="flight-options-subhead">
+            <span>引擎推力</span>
+            <small>每台独立设置</small>
+          </div>
+          <div class="engine-throttle-list">
+            ${engineRows || '<p class="option-empty">未配置引擎</p>'}
+          </div>
+        </section>
 
         <aside class="flight-map-panel">
           <div class="flight-map-head">
@@ -70,6 +143,7 @@ export class FlightHud {
           <div class="flight-map-meta">
             <span data-map-biome>平原</span>
             <span data-map-loaded>0 区块</span>
+            <span data-weather-state>天气关</span>
           </div>
           <label class="chunk-range">
             <div class="chunk-range__head">
@@ -104,6 +178,25 @@ export class FlightHud {
           </div>
           <p class="flight-help-note">拖动环视 · 滚轮${this.cameraMode === 'first' ? '视野' : '远近'} · ${engineCount} 台引擎</p>
         </aside>
+
+        <div class="flight-first-person-hud" data-first-person-hud hidden>
+          <div class="fph-world" data-fph-world>
+            <div class="fph-horizon"></div>
+            <div class="fph-ladder fph-ladder--up">10</div>
+            <div class="fph-ladder fph-ladder--up fph-ladder--twenty">20</div>
+            <div class="fph-ladder fph-ladder--down">10</div>
+            <div class="fph-ladder fph-ladder--down fph-ladder--twenty">20</div>
+          </div>
+          <span class="fph-reticle"></span>
+          <div class="fph-readout fph-readout--speed">
+            <span>SPD</span><strong data-fph-speed>0</strong><small>kt</small>
+          </div>
+          <div class="fph-readout fph-readout--altitude">
+            <span>ALT</span><strong data-fph-altitude>0</strong><small>m</small>
+          </div>
+          <div class="fph-heading"><span data-fph-heading>000</span>° <b data-fph-cardinal>N</b></div>
+          <div class="fph-bank">BANK <b data-fph-bank>0°</b></div>
+        </div>
 
         <div class="flight-dashboard">
           <div class="instrument instrument--airspeed">
@@ -169,6 +262,7 @@ export class FlightHud {
               <div class="engine-lights">
                 ${Array.from({ length: Math.max(1, engineCount) }, () => '<i></i>').join('')}
               </div>
+              ${engineReadouts ? `<div class="engine-throttles">${engineReadouts}</div>` : ''}
               <span class="g-load">G <b data-gload>1.0</b></span>
               <span class="g-load">AOA <b data-aoa>0°</b></span>
               <span class="g-load">LIFT <b data-lift>0 kN</b></span>
@@ -249,6 +343,22 @@ export class FlightHud {
       mapRange: this.overlayHost.querySelector('[data-map-range]'),
       mapBiome: this.overlayHost.querySelector('[data-map-biome]'),
       mapLoaded: this.overlayHost.querySelector('[data-map-loaded]'),
+      weatherState: this.overlayHost.querySelector('[data-weather-state]'),
+      optionsButton: this.overlayHost.querySelector('[data-hud-options]'),
+      optionsPanel: this.overlayHost.querySelector('[data-hud-options-panel]'),
+      optionsClose: this.overlayHost.querySelector('[data-hud-options-close]'),
+      airflowToggle: this.overlayHost.querySelector('[data-airflow-toggle]'),
+      firstPersonHudToggle: this.overlayHost.querySelector('[data-first-person-hud-toggle]'),
+      weatherToggle: this.overlayHost.querySelector('[data-weather-toggle]'),
+      engineSliders: [...this.overlayHost.querySelectorAll('[data-engine-throttle]')],
+      engineReadouts: [...this.overlayHost.querySelectorAll('[data-engine-readout]')],
+      firstPersonHud: this.overlayHost.querySelector('[data-first-person-hud]'),
+      fphWorld: this.overlayHost.querySelector('[data-fph-world]'),
+      fphSpeed: this.overlayHost.querySelector('[data-fph-speed]'),
+      fphAltitude: this.overlayHost.querySelector('[data-fph-altitude]'),
+      fphHeading: this.overlayHost.querySelector('[data-fph-heading]'),
+      fphCardinal: this.overlayHost.querySelector('[data-fph-cardinal]'),
+      fphBank: this.overlayHost.querySelector('[data-fph-bank]'),
       chunkRadius: this.overlayHost.querySelector('[data-chunk-radius]'),
       chunkRadiusInput: this.overlayHost.querySelector('[data-chunk-radius-input]'),
       chunkMin: this.overlayHost.querySelector('[data-chunk-min]'),
@@ -305,6 +415,35 @@ export class FlightHud {
       this.onChunkRadiusChange?.(radius);
     });
     this.ui.chunkRadiusInput.addEventListener('change', () => this.ui.chunkRadiusInput.blur());
+    this.ui.optionsButton.addEventListener('click', () => {
+      const open = this.ui.optionsPanel.hidden;
+      this.ui.optionsPanel.hidden = !open;
+      this.ui.optionsButton.setAttribute('aria-expanded', String(open));
+    });
+    this.ui.optionsClose.addEventListener('click', () => {
+      this.ui.optionsPanel.hidden = true;
+      this.ui.optionsButton.setAttribute('aria-expanded', 'false');
+    });
+    this.ui.airflowToggle.addEventListener('change', () => {
+      this.setAirflowEnabled(this.ui.airflowToggle.checked);
+      this.onAirflowChange?.(this.airflowEnabled);
+    });
+    this.ui.weatherToggle.addEventListener('change', () => {
+      this.setWeatherEnabled(this.ui.weatherToggle.checked);
+      this.onWeatherChange?.(this.weatherEnabled);
+    });
+    this.ui.firstPersonHudToggle.addEventListener('change', () => {
+      this.setFirstPersonHudEnabled(this.ui.firstPersonHudToggle.checked);
+      this.onFirstPersonHudChange?.(this.firstPersonHudEnabled);
+    });
+    for (const slider of this.ui.engineSliders) {
+      slider.addEventListener('input', () => {
+        const percent = Number(slider.value) || 0;
+        const output = slider.closest('.engine-throttle-row')?.querySelector('[data-engine-percent]');
+        if (output) output.textContent = `${Math.round(percent)}%`;
+        this.onEngineThrottle?.(slider.dataset.engineThrottle, percent / 100);
+      });
+    }
   }
 
   setChunkSettings({ radius, min, max, chunkSize }) {
@@ -348,9 +487,36 @@ export class FlightHud {
   setCameraMode(mode) {
     this.cameraMode = mode;
     this.ui.cameraLabel.textContent = `${mode === 'first' ? '第一人称' : '第三人称'} · ${this._key('toggleCamera')}`;
-    this.ui.root.classList.toggle('is-first-person', mode === 'first');
     const note = this.ui.root.querySelector('.flight-help-note');
     if (note) note.textContent = `拖动环视 · 滚轮${mode === 'first' ? '视野' : '远近'} · ${this.model.flightSystems?.engines?.length ?? 0} 台引擎`;
+    this._applyHudVisibility();
+  }
+
+  setAirflowEnabled(enabled) {
+    this.airflowEnabled = Boolean(enabled);
+    if (this.ui.airflowToggle) this.ui.airflowToggle.checked = this.airflowEnabled;
+  }
+
+  setWeatherEnabled(enabled) {
+    this.weatherEnabled = Boolean(enabled);
+    if (this.ui.weatherToggle) this.ui.weatherToggle.checked = this.weatherEnabled;
+    if (this.ui.weatherState) {
+      this.ui.weatherState.textContent = this.weatherEnabled ? '天气 · 有风' : '天气关';
+      this.ui.weatherState.dataset.active = String(this.weatherEnabled);
+    }
+  }
+
+  setFirstPersonHudEnabled(enabled) {
+    this.firstPersonHudEnabled = Boolean(enabled);
+    if (this.ui.firstPersonHudToggle) this.ui.firstPersonHudToggle.checked = this.firstPersonHudEnabled;
+    this._applyHudVisibility();
+  }
+
+  _applyHudVisibility() {
+    const first = this.cameraMode === 'first';
+    this.ui.root.classList.toggle('is-first-person', first);
+    this.ui.root.classList.toggle('hud-disabled', first && !this.firstPersonHudEnabled);
+    this.ui.firstPersonHud.hidden = !(first && this.firstPersonHudEnabled);
   }
 
   update(state, mapData = null) {
@@ -382,9 +548,40 @@ export class FlightHud {
     this.ui.aoa.textContent = `${formatNumber(state.angleOfAttackDeg ?? 0, 1)}°`;
     this.ui.lift.textContent = `${formatNumber((state.liftN ?? 0) / 1000, 1)} kN`;
     this.ui.mass.textContent = `${formatNumber(state.massKg ?? 0, 0)} kg`;
-    this.ui.engineLights.forEach(light => {
-      light.style.opacity = String(0.18 + state.throttle * 0.82);
+    const engineStates = state.engines ?? [];
+    this.ui.engineLights.forEach((light, index) => {
+      const engineThrottle = engineStates[index]?.throttle ?? state.throttle;
+      light.style.opacity = String(0.18 + engineThrottle * 0.82);
     });
+    for (const engine of engineStates) {
+      const percent = Math.round(engine.throttle * 100);
+      const id = CSS.escape(engine.id);
+      const slider = this.ui.engineSliders.find(item => item.dataset.engineThrottle === engine.id);
+      if (slider && document.activeElement !== slider) slider.value = String(percent);
+      const output = this.overlayHost.querySelector(`[data-engine-percent="${id}"]`);
+      if (output) output.textContent = `${percent}%`;
+      const readout = this.overlayHost.querySelector(`[data-engine-readout="${id}"] [data-engine-readout-value]`);
+      if (readout) readout.textContent = `${percent}%`;
+    }
+    if (this.ui.weatherState) {
+      const windSpeed = Math.hypot(
+        state.windVelocity?.x ?? 0,
+        state.windVelocity?.y ?? 0,
+        state.windVelocity?.z ?? 0
+      );
+      this.ui.weatherState.textContent = state.weatherEnabled
+        ? `天气 · 风 ${formatNumber(windSpeed, 1)} m/s`
+        : '天气关';
+      this.ui.weatherState.dataset.active = String(Boolean(state.weatherEnabled));
+    }
+
+    this.ui.fphSpeed.textContent = formatNumber(knots, 0);
+    this.ui.fphAltitude.textContent = formatNumber(Math.max(0, state.altitudeAglM), 0);
+    this.ui.fphHeading.textContent = String(Math.round(heading) % 360).padStart(3, '0');
+    this.ui.fphCardinal.textContent = CARDINALS[Math.round(heading / 45) % 8];
+    this.ui.fphBank.textContent = `${state.rollDeg > 0 ? '+' : ''}${formatNumber(state.rollDeg, 0)}°`;
+    this.ui.fphWorld.style.setProperty('--fph-roll', `${(-state.rollDeg).toFixed(2)}deg`);
+    this.ui.fphWorld.style.setProperty('--fph-pitch', `${(state.pitchDeg * 2.15).toFixed(2)}px`);
 
     let phase = 'AIRBORNE';
     if (state.crashed) phase = 'CRASHED';

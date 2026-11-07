@@ -3,6 +3,8 @@ package com.aerolab.web.flight;
 import com.aerolab.core.flight.FlightState;
 import com.aerolab.web.dto.ModelDto;
 
+import java.util.List;
+
 public record FlightStateDto(
         double timeSeconds,
         ModelDto.Vec3Dto position,
@@ -17,6 +19,9 @@ public record FlightStateDto(
         double rollDeg,
         double throttle,
         double engineThrustN,
+        List<EngineStateDto> engines,
+        boolean weatherEnabled,
+        ModelDto.Vec3Dto windVelocity,
         double liftN,
         double dragN,
         double angleOfAttackDeg,
@@ -31,6 +36,15 @@ public record FlightStateDto(
 ) {
 
     public record QuatDto(double x, double y, double z, double w) {
+    }
+
+    public record EngineStateDto(
+            String id,
+            String name,
+            double throttle,
+            double thrustN,
+            double maxThrustN
+    ) {
     }
 
     public static FlightStateDto from(FlightState state) {
@@ -53,6 +67,21 @@ public record FlightStateDto(
                 state.rollDeg(),
                 state.throttle(),
                 state.engineThrustN(),
+                state.engines().stream()
+                        .map(engine -> new EngineStateDto(
+                                engine.id(),
+                                engine.name(),
+                                engine.throttle(),
+                                engine.thrustN(),
+                                engine.maxThrustN()
+                        ))
+                        .toList(),
+                state.weatherEnabled(),
+                new ModelDto.Vec3Dto(
+                        state.windVelocity().x(),
+                        state.windVelocity().y(),
+                        state.windVelocity().z()
+                ),
                 state.liftN(),
                 state.dragN(),
                 state.angleOfAttackDeg(),

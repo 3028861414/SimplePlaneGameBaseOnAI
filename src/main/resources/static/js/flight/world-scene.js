@@ -4,6 +4,8 @@ import { decodeFloat32Base64 } from '../util/binary.js';
 import { makeUnitGeometry } from '../util/part-geometry.js';
 import { srgbToLinear } from '../util/color-map.js';
 import { terrainColor } from './terrain-style.js';
+import { AirflowParticles } from './airflow-particles.js';
+import { WeatherEffect } from './weather-effect.js';
 
 export class FlightWorldScene {
   constructor(container, model) {
@@ -46,6 +48,7 @@ export class FlightWorldScene {
     this.renderClockSeconds = null;
     this.sunBase = new THREE.Vector3(-1200, 2100, 800);
     this.sunSpriteBase = new THREE.Vector3(-4200, 5000, 2900);
+    this.weatherEnabled = false;
     this._events = new AbortController();
     this._disposed = false;
     this._chunkDrainScheduled = false;
@@ -63,6 +66,8 @@ export class FlightWorldScene {
 
     this._buildLightingAndSky();
     this._buildAircraft();
+    this.airflow = new AirflowParticles(this.scene);
+    this.weather = new WeatherEffect(this.scene);
     this._bindPointer();
     this.viewport.onFrame(dt => this._update(dt));
   }
@@ -222,8 +227,25 @@ export class FlightWorldScene {
 
   _updateFog() {
     const viewDistance = Math.max(800, this.chunkSize * (this.chunkRadius + 0.5));
-    this.scene.fog.near = viewDistance * 0.4;
-    this.scene.fog.far = viewDistance * 0.98;
+    const weatherScale = this.weatherEnabled ? 0.62 : 1;
+    this.scene.fog.near = viewDistance * 0.4 * weatherScale;
+    this.scene.fog.far = viewDistance * 0.98 * weatherScale;
+  }
+
+  setAirflowVisible(visible) {
+    this.airflow?.setVisible(visible);
+  }
+
+  setWeatherVisible(enabled) {
+    this.weatherEnabled = Boolean(enabled);
+    this.weather?.setEnabled(this.weatherEnabled);
+    this._updateFog();
+    this.scene.fog.color.set(this.weatherEnabled ? 0x84969c : 0xb7d2dc);
+    if (this.sun) this.sun.intensity = this.weatherEnabled ? 2.0 : 3.1;
+    if (this.sky?.material?.uniforms) {
+      this.sky.material.uniforms.topColor.value.set(this.weatherEnabled ? 0x536d7c : 0x4f86ad);
+      this.sky.material.uniforms.horizonColor.value.set(this.weatherEnabled ? 0x9faeb2 : 0xdcebee);
+    }
   }
 
   _enqueueChunk(dto) {
@@ -635,6 +657,8 @@ export class FlightWorldScene {
     this.aircraft.position.copy(this.currentPosition);
     this.aircraft.quaternion.copy(this.currentQuaternion);
     this._followWorld();
+    this.airflow?.update(dt, this.currentPosition, this.currentQuaternion, this.state?.velocity, this.state?.windVelocity);
+    this.weather?.update(dt, this.currentPosition, this.state?.windVelocity);
     this._updateCamera(dt, false);
   }
 
@@ -709,6 +733,8 @@ export class FlightWorldScene {
   dispose() {
     this._disposed = true;
     this._events.abort();
+    this.airflow?.dispose();
+    this.weather?.dispose();
     this.viewport.dispose();
   }
 }

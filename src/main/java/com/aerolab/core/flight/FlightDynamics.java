@@ -10,7 +10,9 @@ import com.aerolab.core.model.ShapeType;
 import com.aerolab.core.world.TerrainWorld;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Force-based rigid-body flight model. Aerodynamic forces are calculated per
@@ -37,6 +39,8 @@ public final class FlightDynamics {
     private static final double GEAR_SPRING_PER_KG = 140.0;
     private static final double GEAR_DAMPING_PER_KG = 7.0;
     private static final double MAX_ANGULAR_VELOCITY = 18;
+    private static final double WEATHER_WIND_X = 4.0;
+    private static final double WEATHER_WIND_Z = 6.5;
 
     private final TerrainWorld world;
     private final FlightSystems systems;
@@ -50,7 +54,8 @@ public final class FlightDynamics {
     private final List<LandingGear> landingGear = new ArrayList<>();
     private final double gearSpringNPerM;
     private final double gearDamperNsPerM;
-    private final double maxThrustN;
+    private final Map<String, Double> engineThrottles = new LinkedHashMap<>();
+    private final Map<String, Double> engineThrusts = new LinkedHashMap<>();
     private final List<LiftingSurface> liftingSurfaces = new ArrayList<>();
     private final List<VerticalSurface> verticalSurfaces = new ArrayList<>();
     private final double parasiteDragArea;
@@ -76,6 +81,9 @@ public final class FlightDynamics {
     private double dragN;
     private double aoaDeg;
     private double gLoad = 1;
+    private boolean weatherEnabled;
+    private double weatherBlend;
+    private Vec3 windVelocity = Vec3.ZERO;
 
     public FlightDynamics(TerrainWorld world, AircraftDefinition aircraft) {
         this.world = world;
@@ -86,7 +94,9 @@ public final class FlightDynamics {
         this.massKg = massProperties.massKg();
         this.centerOfMass = massProperties.centerOfMass();
         this.inverseInertia = massProperties.inverseInertia();
-        this.maxThrustN = Math.max(0, systems.totalMaxThrustN());
+        for (EngineSpec engine : systems.engines()) {
+            engineThrottles.put(engine.id(), 0.0);
+        }
 
         double modelMinX = Double.POSITIVE_INFINITY;
         double modelMaxX = Double.NEGATIVE_INFINITY;
@@ -163,12 +173,17 @@ public final class FlightDynamics {
         yawInput = 0;
         rollInput = 0;
         throttle = 0;
+        for (String engineId : engineThrottles.keySet()) {
+            engineThrottles.put(engineId, 0.0);
+        }
+        engineThrusts.clear();
         timeSeconds = 0;
         onGround = true;
         crashed = false;
         stalled = false;
         crashReason = null;
         engineThrustN = 0;
+        windVelocity = Vec3.ZERO;
         liftN = 0;
         dragN = 0;
         aoaDeg = 0;
@@ -182,7 +197,8 @@ public final class FlightDynamics {
         timeSeconds += step;
         updateInputs(step);
         updateThrottle(step);
-        engineThrustN = maxThrustN * throttle * (controls.boost() ? 1.35 : 1.0);
+        updateWeather(step);
+        updateEngineThrust();
         if (onGround) stepOnGround(step);
         else stepInAir(step);
     }
@@ -196,9 +212,57 @@ public final class FlightDynamics {
 
     private void updateThrottle(double dt) {
         double direction = controls.throttleDirection();
-        if (direction > 0) throttle = Math.min(1, throttle + THROTTLE_RATE * dt);
-        if (direction < 0) throttle = Math.max(0, throttle - THROTTLE_RATE * dt);
-        if (controls.brake() && onGround) throttle = Math.max(0, throttle - THROTTLE_RATE * 1.8 * dt);
+        if (direction > 0) adjustAllEngineThrottle(THROTTLE_RATE * dt);
+        if (direction < 0) adjustAllEngineThrottle(-THROTTLE_RATE * dt);
+        if (controls.brake() && onGround) adjustAllEngineThrottle(-THROTTLE_RATE * 1.8 * dt);
+    }
+
+    private void adjustAllEngineThrottle(double delta) {
+        if (engineThrottles.isEmpty()) {
+            throttle = clamp(throttle + delta, 0, 1);
+            return;
+        }
+        for (Map.Entry<String, Double> entry : engineThrottles.entrySet()) {
+            entry.setValue(clamp(entry.getValue() + delta, 0, 1));
+        }
+        throttle = averageEngineThrottle();
+    }
+
+    private void updateEngineThrust() {
+        double boost = controls.boost() ? 1.35 : 1.0;
+        double total = 0;
+        engineThrusts.clear();
+        for (EngineSpec engine : systems.engines()) {
+            double engineThrottle = clamp(engineThrottles.getOrDefault(engine.id(), 0.0), 0, 1);
+            double thrust = engine.maxThrustN() * engineThrottle * boost;
+            engineThrusts.put(engine.id(), thrust);
+            total += thrust;
+        }
+        engineThrustN = total;
+    }
+
+    private void updateWeather(double dt) {
+        double target = weatherEnabled ? 1.0 : 0.0;
+        weatherBlend += (target - weatherBlend) * Math.min(1, dt * 0.8);
+        if (weatherBlend < 1e-4) {
+            windVelocity = Vec3.ZERO;
+            return;
+        }
+        double t = timeSeconds;
+        double gust = 0.65 * Math.sin(t * 0.9) + 0.35 * Math.sin(t * 2.4 + 1.1);
+        Vec3 wind = new Vec3(
+                WEATHER_WIND_X + 1.8 * gust,
+                0.25 * Math.sin(t * 1.8 + 0.4),
+                WEATHER_WIND_Z + 2.2 * Math.sin(t * 0.37 + 2.0)
+        );
+        windVelocity = wind.multiply(weatherBlend);
+    }
+
+    private double averageEngineThrottle() {
+        if (engineThrottles.isEmpty()) return throttle;
+        double total = 0;
+        for (double value : engineThrottles.values()) total += value;
+        return total / engineThrottles.size();
     }
 
     private void stepOnGround(double dt) {
@@ -267,7 +331,8 @@ public final class FlightDynamics {
     }
 
     private AerodynamicResult computeAerodynamics() {
-        Vec3 vBody = orientation.conjugate().rotate(velocity);
+        Vec3 airVelocityWorld = velocity.subtract(windVelocity);
+        Vec3 vBody = orientation.conjugate().rotate(airVelocityWorld);
         Vec3 omega = angularVelocity;
         Vec3 forceBody = Vec3.ZERO;
         Vec3 torqueBody = Vec3.ZERO;
@@ -361,10 +426,9 @@ public final class FlightDynamics {
 
     private Vec3 engineTorque() {
         Vec3 torque = Vec3.ZERO;
-        double sum = Math.max(1e-9, maxThrustN);
         for (EngineSpec engine : systems.engines()) {
             Vec3 rel = engine.position().subtract(centerOfMass);
-            Vec3 force = new Vec3(engineThrustN * engine.maxThrustN() / sum, 0, 0);
+            Vec3 force = new Vec3(engineThrusts.getOrDefault(engine.id(), 0.0), 0, 0);
             torque = torque.add(rel.cross(force));
         }
         return torque;
@@ -537,6 +601,9 @@ public final class FlightDynamics {
                 roll,
                 throttle,
                 engineThrustN,
+                engineStates(),
+                weatherEnabled,
+                windVelocity,
                 liftN,
                 dragN,
                 aoaDeg,
@@ -552,7 +619,31 @@ public final class FlightDynamics {
     }
 
     public synchronized void setThrottle(double throttle) {
-        this.throttle = clamp(throttle, 0, 1);
+        double value = clamp(throttle, 0, 1);
+        this.throttle = value;
+        for (String engineId : engineThrottles.keySet()) {
+            engineThrottles.put(engineId, value);
+        }
+    }
+
+    public synchronized void setEngineThrottle(String engineId, double throttle) {
+        if (engineId == null || !engineThrottles.containsKey(engineId)) return;
+        engineThrottles.put(engineId, clamp(throttle, 0, 1));
+        this.throttle = averageEngineThrottle();
+    }
+
+    public synchronized void setWeatherEnabled(boolean enabled) {
+        this.weatherEnabled = enabled;
+    }
+
+    private List<EngineState> engineStates() {
+        List<EngineState> states = new ArrayList<>(systems.engines().size());
+        for (EngineSpec engine : systems.engines()) {
+            double engineThrottle = clamp(engineThrottles.getOrDefault(engine.id(), 0.0), 0, 1);
+            double thrust = engineThrusts.getOrDefault(engine.id(), 0.0);
+            states.add(new EngineState(engine.id(), engine.name(), engineThrottle, thrust, engine.maxThrustN()));
+        }
+        return states;
     }
 
     public synchronized double throttle() {

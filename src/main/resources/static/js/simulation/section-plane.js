@@ -39,16 +39,6 @@ export class SectionPlane {
     this.mesh.renderOrder = 6;
     this.group.add(this.mesh);
 
-    this.borderGeometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()
-    ]);
-    this.border = new THREE.LineLoop(
-      this.borderGeometry,
-      new THREE.LineBasicMaterial({ color: 0xffb166, transparent: true, opacity: 0.82, depthTest: false })
-    );
-    this.border.renderOrder = 9;
-    this.group.add(this.border);
-
     this.outlineGeometry = new THREE.BufferGeometry();
     this.outline = new THREE.LineSegments(
       this.outlineGeometry,
@@ -93,6 +83,8 @@ export class SectionPlane {
 
   _rebuildGeometry() {
     const b = this._sectionBounds();
+    const fieldBounds = this.field.bounds;
+    const inset = Math.max((this.field.minCell ?? 0.1) * 0.55, 1e-4);
     let p0;
     let p1;
     let p2;
@@ -103,27 +95,46 @@ export class SectionPlane {
     let vMax;
 
     if (this.axis === 'X') {
-      p0 = new THREE.Vector3(this.coordinate, b.minY, b.minZ);
-      p1 = new THREE.Vector3(this.coordinate, b.minY, b.maxZ);
-      p2 = new THREE.Vector3(this.coordinate, b.maxY, b.maxZ);
-      p3 = new THREE.Vector3(this.coordinate, b.maxY, b.minZ);
-      uMin = b.minZ; uMax = b.maxZ;
-      vMin = b.minY; vMax = b.maxY;
+      uMin = Math.max(b.minZ, fieldBounds.min.z + inset);
+      uMax = Math.min(b.maxZ, fieldBounds.max.z - inset);
+      vMin = Math.max(b.minY, fieldBounds.min.y + inset);
+      vMax = Math.min(b.maxY, fieldBounds.max.y - inset);
+      if (!(this.coordinate >= fieldBounds.min.x && this.coordinate <= fieldBounds.max.x)) {
+        uMin = uMax = vMin = vMax = this.coordinate;
+      }
+      p0 = new THREE.Vector3(this.coordinate, vMin, uMin);
+      p1 = new THREE.Vector3(this.coordinate, vMin, uMax);
+      p2 = new THREE.Vector3(this.coordinate, vMax, uMax);
+      p3 = new THREE.Vector3(this.coordinate, vMax, uMin);
     } else if (this.axis === 'Y') {
-      p0 = new THREE.Vector3(b.minX, this.coordinate, b.minZ);
-      p1 = new THREE.Vector3(b.maxX, this.coordinate, b.minZ);
-      p2 = new THREE.Vector3(b.maxX, this.coordinate, b.maxZ);
-      p3 = new THREE.Vector3(b.minX, this.coordinate, b.maxZ);
-      uMin = b.minX; uMax = b.maxX;
-      vMin = b.minZ; vMax = b.maxZ;
+      uMin = Math.max(b.minX, fieldBounds.min.x + inset);
+      uMax = Math.min(b.maxX, fieldBounds.max.x - inset);
+      vMin = Math.max(b.minZ, fieldBounds.min.z + inset);
+      vMax = Math.min(b.maxZ, fieldBounds.max.z - inset);
+      if (!(this.coordinate >= fieldBounds.min.y && this.coordinate <= fieldBounds.max.y)) {
+        uMin = uMax = vMin = vMax = this.coordinate;
+      }
+      p0 = new THREE.Vector3(uMin, this.coordinate, vMin);
+      p1 = new THREE.Vector3(uMax, this.coordinate, vMin);
+      p2 = new THREE.Vector3(uMax, this.coordinate, vMax);
+      p3 = new THREE.Vector3(uMin, this.coordinate, vMax);
     } else {
-      p0 = new THREE.Vector3(b.minX, b.minY, this.coordinate);
-      p1 = new THREE.Vector3(b.maxX, b.minY, this.coordinate);
-      p2 = new THREE.Vector3(b.maxX, b.maxY, this.coordinate);
-      p3 = new THREE.Vector3(b.minX, b.maxY, this.coordinate);
-      uMin = b.minX; uMax = b.maxX;
-      vMin = b.minY; vMax = b.maxY;
+      uMin = Math.max(b.minX, fieldBounds.min.x + inset);
+      uMax = Math.min(b.maxX, fieldBounds.max.x - inset);
+      vMin = Math.max(b.minY, fieldBounds.min.y + inset);
+      vMax = Math.min(b.maxY, fieldBounds.max.y - inset);
+      if (!(this.coordinate >= fieldBounds.min.z && this.coordinate <= fieldBounds.max.z)) {
+        uMin = uMax = vMin = vMax = this.coordinate;
+      }
+      p0 = new THREE.Vector3(uMin, vMin, this.coordinate);
+      p1 = new THREE.Vector3(uMax, vMin, this.coordinate);
+      p2 = new THREE.Vector3(uMax, vMax, this.coordinate);
+      p3 = new THREE.Vector3(uMin, vMax, this.coordinate);
     }
+
+    const valid = uMax - uMin > 1e-5 && vMax - vMin > 1e-5;
+    this.mesh.visible = valid;
+    this.outline.visible = valid;
 
     const positions = this.geometry.getAttribute('position');
     positions.setXYZ(0, p0.x, p0.y, p0.z);
@@ -140,11 +151,6 @@ export class SectionPlane {
     this.geometry.computeBoundingSphere();
 
     this._section = { uMin, uMax, vMin, vMax, p0, p1, p2, p3 };
-    const nextBorder = new THREE.BufferGeometry().setFromPoints([p0, p1, p2, p3]);
-    nextBorder.computeBoundingSphere();
-    this.border.geometry = nextBorder;
-    this.borderGeometry.dispose();
-    this.borderGeometry = nextBorder;
   }
 
   _rebuildTexture() {
@@ -172,7 +178,7 @@ export class SectionPlane {
           data[pixel] = Math.round(fallback[0]);
           data[pixel + 1] = Math.round(fallback[1]);
           data[pixel + 2] = Math.round(fallback[2]);
-          data[pixel + 3] = 0;
+          data[pixel + 3] = 36;
           continue;
         }
         const norm = this.metric === 'speed'
@@ -288,8 +294,6 @@ export class SectionPlane {
     this.geometry.dispose();
     this.material.dispose();
     this.texture?.dispose();
-    this.borderGeometry.dispose();
-    this.border.material.dispose();
     this.outlineGeometry.dispose();
     this.outline.material.dispose();
   }

@@ -48,7 +48,8 @@ export function icon(name, size = 18) {
     reset: '<path d="M12 5V2L7 6.5 12 11V8a5 5 0 1 1-5 5H5a7 7 0 1 0 7-8Z"/>',
     upload: '<path d="M11 15V4.8L7.4 8.4 6 7l6-6 6 6-1.4 1.4L13 4.8V15h-2Zm-7 2h2v3h12v-3h2v5H4v-5Z"/>',
     download: '<path d="M11 2h2v10.2l3.6-3.6L18 10l-6 6-6-6 1.4-1.4 3.6 3.6V2ZM4 17h2v3h12v-3h2v5H4v-5Z"/>',
-    check: '<path d="M9.2 16.2 3.8 10.8l1.4-1.4 4 4L16.8 5.8l1.4 1.4-9 9Z"/>'
+    check: '<path d="M9.2 16.2 3.8 10.8l1.4-1.4 4 4L16.8 5.8l1.4 1.4-9 9Z"/>',
+    sliders: '<path d="M4 5h16v2H4V5Zm0 6h16v2H4v-2Zm0 6h16v2H4v-2Z"/><circle cx="8" cy="6" r="2.2"/><circle cx="16" cy="12" r="2.2"/><circle cx="10" cy="18" r="2.2"/>'
   };
   return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor">${paths[name] ?? ''}</svg>`;
 }

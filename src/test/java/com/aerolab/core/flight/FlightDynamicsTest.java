@@ -73,6 +73,50 @@ class FlightDynamicsTest {
     }
 
     @Test
+    void individualEngineThrottleIsReflectedInTelemetry() {
+        dynamics.setEngineThrottle("engine-left", 1.0);
+        run(0.2);
+        FlightState state = dynamics.snapshot();
+        EngineState left = state.engines().stream()
+                .filter(engine -> engine.id().equals("engine-left")).findFirst().orElseThrow();
+        EngineState right = state.engines().stream()
+                .filter(engine -> engine.id().equals("engine-right")).findFirst().orElseThrow();
+        assertEquals(1.0, left.throttle(), 1e-9);
+        assertEquals(0.0, right.throttle(), 1e-9);
+        assertEquals(4200, left.thrustN(), 1e-9);
+        assertEquals(0, right.thrustN(), 1e-9);
+        assertEquals(4200, state.engineThrustN(), 1e-9);
+    }
+
+    @Test
+    void weatherProducesWindAndCanBeDisabled() {
+        dynamics.setWeatherEnabled(true);
+        run(3.0);
+        FlightState windy = dynamics.snapshot();
+        assertTrue(windy.weatherEnabled());
+        assertTrue(windy.windVelocity().length() > 2.0);
+
+        dynamics.setWeatherEnabled(false);
+        run(8.0);
+        FlightState calm = dynamics.snapshot();
+        assertFalse(calm.weatherEnabled());
+        assertTrue(calm.windVelocity().length() < 0.2);
+    }
+
+    @Test
+    void canTakeOffWithWeatherWindEnabled() {
+        dynamics.setWeatherEnabled(true);
+        dynamics.setKey(KeyBindings.defaults().codeFor(KeyBindings.THROTTLE_UP), true);
+        run(9.0);
+        dynamics.setKey(KeyBindings.defaults().codeFor(KeyBindings.PITCH_UP), true);
+        run(4.0);
+        FlightState state = dynamics.snapshot();
+        assertFalse(state.crashed(), state.crashReason());
+        assertFalse(state.onGround());
+        assertTrue(state.altitudeAglM() > 1.0);
+    }
+
+    @Test
     void resetRestoresRunwayStart() {
         dynamics.setKey(KeyBindings.defaults().codeFor(KeyBindings.THROTTLE_UP), true);
         run(2);

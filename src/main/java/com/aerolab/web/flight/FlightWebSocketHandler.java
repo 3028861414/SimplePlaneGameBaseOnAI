@@ -39,6 +39,15 @@ public class FlightWebSocketHandler extends TextWebSocketHandler {
                         node.path("pressed").asBoolean(false)
                 );
                 case "reset" -> sessionManager.resetSession(session);
+                case "engineThrottle" -> sessionManager.setEngineThrottle(
+                        session,
+                        node.path("engineId").asText(""),
+                        node.path("value").asDouble(0)
+                );
+                case "weather" -> sessionManager.setWeatherEnabled(
+                        session,
+                        node.path("enabled").asBoolean(false)
+                );
                 case "chunkRadius" -> sessionManager.setChunkRadius(
                         session,
                         node.path("value").asInt(com.aerolab.core.world.WorldConfig.DEFAULT_CHUNK_RADIUS)

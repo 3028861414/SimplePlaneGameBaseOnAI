@@ -127,6 +127,20 @@ public class FlightSessionManager {
         }
     }
 
+    public void setEngineThrottle(WebSocketSession session, String engineId, double throttle) {
+        Runtime runtime = runtimes.get(session.getId());
+        if (runtime != null) {
+            runtime.dynamics.setEngineThrottle(engineId, throttle);
+        }
+    }
+
+    public void setWeatherEnabled(WebSocketSession session, boolean enabled) {
+        Runtime runtime = runtimes.get(session.getId());
+        if (runtime != null) {
+            runtime.dynamics.setWeatherEnabled(enabled);
+        }
+    }
+
     public void resetSession(WebSocketSession session) {
         Runtime runtime = runtimes.get(session.getId());
         if (runtime != null) {

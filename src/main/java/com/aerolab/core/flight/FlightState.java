@@ -3,6 +3,8 @@ package com.aerolab.core.flight;
 import com.aerolab.core.geometry.Quat;
 import com.aerolab.core.geometry.Vec3;
 
+import java.util.List;
+
 public record FlightState(
         double timeSeconds,
         Vec3 position,
@@ -17,6 +19,9 @@ public record FlightState(
         double rollDeg,
         double throttle,
         double engineThrustN,
+        List<EngineState> engines,
+        boolean weatherEnabled,
+        Vec3 windVelocity,
         double liftN,
         double dragN,
         double angleOfAttackDeg,

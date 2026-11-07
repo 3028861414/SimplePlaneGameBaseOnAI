@@ -10,6 +10,9 @@ const SERVER_CONTROL_ACTIONS = new Set([
   'rollLeft', 'rollRight', 'boost', 'brake'
 ]);
 const CHUNK_RADIUS_KEY = 'aerolab.flight.chunk-radius.v1';
+const AIRFLOW_KEY = 'aerolab.flight.airflow.v1';
+const WEATHER_KEY = 'aerolab.flight.weather.v1';
+const FIRST_PERSON_HUD_KEY = 'aerolab.flight.first-person-hud.v1';
 const DEFAULT_CHUNK_RADIUS = 3;
 
 export class FlightView {
@@ -23,17 +26,30 @@ export class FlightView {
     this._pressedKeys = new Set();
     this._events = new AbortController();
     this.chunkRadius = loadChunkRadius();
+    this.airflowEnabled = loadBoolean(AIRFLOW_KEY, true);
+    this.weatherEnabled = loadBoolean(WEATHER_KEY, false);
+    this.firstPersonHudEnabled = loadBoolean(FIRST_PERSON_HUD_KEY, true);
 
     this.scene = new FlightWorldScene(container, this.model);
+    this.scene.setAirflowVisible(this.airflowEnabled);
+    this.scene.setWeatherVisible(this.weatherEnabled);
     this.hud = new FlightHud(overlay, {
       model: this.model,
       onToggleCamera: () => this._toggleCamera(),
       onRestart: () => this._restart(),
       onExit: () => this.onExit?.(),
       onRetry: () => this._connect(),
-      onChunkRadiusChange: value => this._setChunkRadius(value)
+      onChunkRadiusChange: value => this._setChunkRadius(value),
+      onAirflowChange: value => this._setAirflow(value),
+      onWeatherChange: value => this._setWeather(value),
+      onFirstPersonHudChange: value => this._setFirstPersonHud(value),
+      onEngineThrottle: (engineId, value) => this.socket?.setEngineThrottle(engineId, value),
+      initialAirflow: this.airflowEnabled,
+      initialWeather: this.weatherEnabled,
+      initialFirstPersonHud: this.firstPersonHudEnabled
     });
     this.hud.setCameraMode('third');
+    this.hud.setWeatherEnabled(this.weatherEnabled);
     this._renderHeader();
     this._bindKeyboard();
     this._connect();
@@ -109,6 +125,7 @@ export class FlightView {
       chunkSize: world.chunkSize
     });
     this.hud.hideLoading();
+    if (this.weatherEnabled) this.socket?.setWeather(true);
     this.hud.update(state, this.scene.getMapData());
     this._setLinkState('实时飞行 · 60 Hz', 'live');
     this.hud.setNotice('滑行起飞：增加油门，达到起飞速度后抬头', { duration: 4200 });
@@ -168,6 +185,34 @@ export class FlightView {
     this.hud.setCameraMode(mode);
     if (mode === 'first') this.hud.setNotice('第一人称驾驶舱视角', { duration: 1800 });
     else this.hud.setNotice('第三人称跟随视角', { duration: 1800 });
+  }
+
+  _setAirflow(enabled) {
+    this.airflowEnabled = Boolean(enabled);
+    this.scene.setAirflowVisible(this.airflowEnabled);
+    saveBoolean(AIRFLOW_KEY, this.airflowEnabled);
+    this.hud.setNotice(this.airflowEnabled ? '空气粒子已开启' : '空气粒子已关闭', { duration: 1600 });
+  }
+
+  _setWeather(enabled) {
+    this.weatherEnabled = Boolean(enabled);
+    this.scene.setWeatherVisible(this.weatherEnabled);
+    this.socket?.setWeather(this.weatherEnabled);
+    saveBoolean(WEATHER_KEY, this.weatherEnabled);
+    this.hud.setNotice(
+      this.weatherEnabled ? '天气系统已开启：阵风与湍流作用于飞机' : '天气系统已关闭：空气保持静止',
+      { duration: 2200 }
+    );
+  }
+
+  _setFirstPersonHud(enabled) {
+    this.firstPersonHudEnabled = Boolean(enabled);
+    saveBoolean(FIRST_PERSON_HUD_KEY, this.firstPersonHudEnabled);
+    if (this.scene.cameraMode !== 'first') {
+      this.hud.setNotice('第一人称 HUD 开关将在座舱视角生效', { duration: 2000 });
+    } else {
+      this.hud.setNotice(this.firstPersonHudEnabled ? '座舱 HUD 已开启' : '座舱 HUD 已关闭', { duration: 1600 });
+    }
   }
 
   _restart() {
@@ -257,5 +302,23 @@ function loadChunkRadius() {
     return Number.isFinite(stored) ? Math.max(2, Math.min(6, Math.round(stored))) : DEFAULT_CHUNK_RADIUS;
   } catch {
     return DEFAULT_CHUNK_RADIUS;
+  }
+}
+
+
+function loadBoolean(key, fallback) {
+  try {
+    const value = localStorage.getItem(key);
+    return value === null ? fallback : value === 'true';
+  } catch {
+    return fallback;
+  }
+}
+
+function saveBoolean(key, value) {
+  try {
+    localStorage.setItem(key, String(value));
+  } catch {
+    // Storage is optional; the current session still uses the value.
   }
 }
