@@ -179,7 +179,7 @@ export class ModelEditor {
             <div class="scene-tools">
               <button class="icon-btn" type="button" data-action="import-aircraft" title="导入飞机 JSON">${icon('upload', 15)}</button>
               <button class="icon-btn" type="button" data-action="export-aircraft" title="导出飞机 JSON">${icon('download', 15)}</button>
-              <button class="icon-btn" type="button" data-action="reset" title="载入示例飞行器">${icon('reset', 15)}</button>
+              <button class="icon-btn" type="button" data-action="reset" title="一键恢复默认飞机模型">${icon('reset', 15)}</button>
             </div>
           </div>
           <label class="model-name-row">
@@ -377,7 +377,7 @@ export class ModelEditor {
       }
       if (event.target.matches('input')) {
         this._commitNow();
-        if (event.target.matches('[data-part-vec], [data-cockpit-vec], [data-cockpit-scalar], [data-flight-vec]')) {
+        if (event.target.matches('[data-part-vec], [data-cockpit-vec], [data-cockpit-scalar], [data-flight-vec], [data-flight-area], [data-flight-item-mass]')) {
           this._syncVisibleFields();
         }
       }
@@ -510,16 +510,7 @@ export class ModelEditor {
   _handleAction(action) {
     switch (action) {
       case 'reset':
-        if (this.model.parts.length === 0) {
-          this._resetToDemo();
-        } else if (this._resetArmed) {
-          this._resetArmed = false;
-          this._resetToDemo();
-        } else {
-          this._resetArmed = true;
-          showToast('再次点击“载入示例”以确认覆盖当前模型。', { type: 'info', duration: 3200 });
-          setTimeout(() => { this._resetArmed = false; }, 3200);
-        }
+        this._resetToDemo();
         break;
       case 'fit':
         this.fitView();
@@ -571,11 +562,12 @@ export class ModelEditor {
       const value = Number(input.value);
       if (!Number.isFinite(value)) return;
       this.model.flightSystems.massKg = THREE.MathUtils.clamp(value, 100, 100000);
+      this._updateMassSummary();
       this._scheduleCommit();
       return;
     }
 
-    if (input.matches('[data-flight-name], [data-flight-thrust], [data-flight-vec]')) {
+    if (input.matches('[data-flight-name], [data-flight-thrust], [data-flight-vec], [data-flight-area], [data-flight-item-mass]')) {
       const group = input.dataset.flightGroup;
       const item = this.model.flightSystems[group]?.find(entry => entry.id === input.dataset.flightId);
       if (!item) return;
@@ -585,6 +577,15 @@ export class ModelEditor {
         const value = Number(input.value);
         if (!Number.isFinite(value)) return;
         item.maxThrustN = THREE.MathUtils.clamp(value, 0, 200000);
+      } else if (input.matches('[data-flight-area]')) {
+        const value = Number(input.value);
+        if (!Number.isFinite(value)) return;
+        item.areaM2 = THREE.MathUtils.clamp(value, 0.01, 500);
+      } else if (input.matches('[data-flight-item-mass]')) {
+        const value = Number(input.value);
+        if (!Number.isFinite(value)) return;
+        item.massKg = THREE.MathUtils.clamp(value, 0, 100000);
+        this._updateMassSummary();
       } else {
         const value = Number(input.value);
         if (!Number.isFinite(value)) return;
@@ -626,6 +627,21 @@ export class ModelEditor {
       }
       this._applyPartTransform(part);
       this._syncSelectionHelper();
+      this._scheduleCommit();
+      return;
+    }
+
+    if (input.matches('[data-part-mass]')) {
+      const value = Number(input.value);
+      if (!Number.isFinite(value)) return;
+      part.massKg = THREE.MathUtils.clamp(value, 0, 100000);
+      this._updateMassSummary();
+      this._scheduleCommit();
+      return;
+    }
+
+    if (input.matches('[data-part-lift]')) {
+      part.liftingSurface = input.checked;
       this._scheduleCommit();
       return;
     }
@@ -939,7 +955,21 @@ export class ModelEditor {
           ${this._vectorFields('位置', 'position', part.position, 'm', 0.1, 'data-part-vec')}
           ${this._vectorFields('旋转', 'rotation', part.rotation, '°', 1, 'data-part-vec')}
           ${this._vectorFields('尺寸', 'size', part.size, 'm', 0.05, 'data-part-vec')}
-          <p class="section-note">${SIZE_HINTS[part.shape]}</p>
+          <div class="two-fields">
+            <label class="field">
+              <span>部件质量</span>
+              <div class="field-with-unit">
+                <input type="number" min="0" max="100000" step="1" value="${formatField(part.massKg ?? 0)}" data-part-mass>
+                <small>kg</small>
+              </div>
+            </label>
+            <label class="field field--check">
+              <span>升力面</span>
+              <input type="checkbox" data-part-lift ${part.liftingSurface ? 'checked' : ''}>
+              <small>迎风产生升力</small>
+            </label>
+          </div>
+          <p class="section-note">${SIZE_HINTS[part.shape]} 质量为 0 的旧模型会按体积分配备用总质量；勾选升力面后，该部件按机翼气动模型计算。</p>
         </section>
       `;
     } else {
@@ -1017,6 +1047,11 @@ export class ModelEditor {
   _flightSystemsMarkup() {
     const systems = this.model.flightSystems;
     const totalThrust = (systems.engines ?? []).reduce((sum, engine) => sum + (Number(engine.maxThrustN) || 0), 0);
+    const structureMass = (this.model.parts ?? []).reduce((sum, part) => sum + (Number(part.massKg) || 0), 0);
+    const equipmentMass = ['engines', 'horizontalRudders', 'verticalRudders', 'guns']
+      .flatMap(group => systems[group] ?? [])
+      .reduce((sum, item) => sum + (Number(item.massKg) || 0), 0);
+    const totalMass = structureMass + equipmentMass;
     return `
       <section class="inspector-section flight-overview">
         <div class="section-heading">
@@ -1028,12 +1063,17 @@ export class ModelEditor {
         </div>
         <div class="flight-overview-grid">
           <label class="field">
-            <span>载具质量</span>
-            <div class="field-with-unit"><input type="number" min="100" max="100000" step="10" value="${formatField(systems.massKg)}" data-flight-mass><small>kg</small></div>
+            <span>备用总质量</span>
+            <div class="field-with-unit"><input type="number" min="0" max="100000" step="10" value="${formatField(systems.massKg)}" data-flight-mass><small>kg</small></div>
           </label>
+          <div class="flight-readout"><span>当前总质量</span><strong data-total-mass>${formatNumber(totalMass, 1)} <small>kg</small></strong></div>
+        </div>
+        <div class="flight-overview-grid">
+          <div class="flight-readout"><span>结构质量</span><strong data-structure-mass>${formatNumber(structureMass, 1)} <small>kg</small></strong></div>
+          <div class="flight-readout"><span>设备质量</span><strong data-equipment-mass>${formatNumber(equipmentMass, 1)} <small>kg</small></strong></div>
           <div class="flight-readout"><span>最大总推力</span><strong>${formatNumber(totalThrust, 0)} <small>N</small></strong></div>
         </div>
-        <p class="section-note">彩色控制点仅在实际驾驶时参与动力学；风洞只读取几何外形。位置为载具局部坐标，X 指向机头。</p>
+        <p class="section-note">部件质量、设备质量和安装位置共同决定重心与转动惯量。备用总质量仅在所有部件质量均为 0 时启用。彩色控制点仅在驾驶时参与动力学；风洞只读取几何外形。位置为载具局部坐标，X 指向机头。</p>
       </section>
       ${this._flightSystemSection('engines', 'Propulsion', '推力作用点：Y/Z 偏移会产生配平力矩。', true)}
       ${this._flightSystemSection('horizontalRudders', 'Horizontal Control', '俯仰舵面：X 力臂越大，抬头/低头控制越有效。')}
@@ -1121,6 +1161,16 @@ export class ModelEditor {
             <div class="field-with-unit"><input type="number" min="0" max="200000" step="100" value="${formatField(item.maxThrustN)}" data-flight-thrust data-flight-group="${group}" data-flight-id="${escapeHtml(item.id)}"><small>N</small></div>
           </label>
         ` : ''}
+        ${group === 'horizontalRudders' || group === 'verticalRudders' ? `
+          <label class="system-thrust">
+            <span>舵面面积</span>
+            <div class="field-with-unit"><input type="number" min="0.01" max="500" step="0.05" value="${formatField(item.areaM2)}" data-flight-area data-flight-group="${group}" data-flight-id="${escapeHtml(item.id)}"><small>m²</small></div>
+          </label>
+        ` : ''}
+        <label class="system-thrust">
+          <span>设备质量</span>
+          <div class="field-with-unit"><input type="number" min="0" max="100000" step="1" value="${formatField(item.massKg ?? 0)}" data-flight-item-mass data-flight-group="${group}" data-flight-id="${escapeHtml(item.id)}"><small>kg</small></div>
+        </label>
       </div>
     `;
   }
@@ -1135,6 +1185,22 @@ export class ModelEditor {
     const conflicts = [...grouped.entries()].filter(([, labels]) => labels.length > 1);
     if (conflicts.length === 0) return '<p class="binding-ok">映射无冲突</p>';
     return `<p class="binding-warning">${conflicts.map(([code, labels]) => `${formatKeyCode(code)} 同时绑定：${labels.join('、')}`).join('；')}</p>`;
+  }
+
+  _updateMassSummary() {
+    const structure = (this.model.parts ?? []).reduce((sum, part) => sum + (Number(part.massKg) || 0), 0);
+    const equipment = ['engines', 'horizontalRudders', 'verticalRudders', 'guns']
+      .flatMap(group => this.model.flightSystems[group] ?? [])
+      .reduce((sum, item) => sum + (Number(item.massKg) || 0), 0);
+    const values = {
+      '[data-total-mass]': structure + equipment,
+      '[data-structure-mass]': structure,
+      '[data-equipment-mass]': equipment
+    };
+    for (const [selector, value] of Object.entries(values)) {
+      const target = this.ui.inspector.querySelector(selector);
+      if (target) target.innerHTML = `${formatNumber(value, 1)} <small>kg</small>`;
+    }
   }
 
   _addFlightSystem(group) {
@@ -1152,7 +1218,18 @@ export class ModelEditor {
       name: `${meta.label} ${items.length + 1}`,
       position: { x: round(anchor.x), y: round(anchor.y), z: round(anchor.z) }
     };
-    if (group === 'engines') item.maxThrustN = 2200;
+    if (group === 'engines') {
+      item.maxThrustN = 2200;
+      item.massKg = 50;
+    } else if (group === 'horizontalRudders') {
+      item.areaM2 = 0.9;
+      item.massKg = 18;
+    } else if (group === 'verticalRudders') {
+      item.areaM2 = 0.8;
+      item.massKg = 14;
+    } else {
+      item.massKg = 25;
+    }
     items.push(item);
     this._updateSystemMarkers();
     this._renderInspector();
@@ -1246,7 +1323,6 @@ export class ModelEditor {
       const imported = parseAircraftFile(text);
       this._exitPreview();
       this._cancelPick();
-      this._resetArmed = false;
       this._capturingBinding = null;
       this.inspectorTab = 'assembly';
       this.model = imported;
@@ -1291,6 +1367,14 @@ export class ModelEditor {
     this.ui.inspector.querySelectorAll('[data-flight-thrust]').forEach(input => {
       const item = this.model.flightSystems[input.dataset.flightGroup]?.find(entry => entry.id === input.dataset.flightId);
       if (item && document.activeElement !== input) input.value = formatField(item.maxThrustN);
+    });
+    this.ui.inspector.querySelectorAll('[data-flight-area]').forEach(input => {
+      const item = this.model.flightSystems[input.dataset.flightGroup]?.find(entry => entry.id === input.dataset.flightId);
+      if (item && document.activeElement !== input) input.value = formatField(item.areaM2);
+    });
+    this.ui.inspector.querySelectorAll('[data-flight-item-mass]').forEach(input => {
+      const item = this.model.flightSystems[input.dataset.flightGroup]?.find(entry => entry.id === input.dataset.flightId);
+      if (item && document.activeElement !== input) input.value = formatField(item.massKg);
     });
     this.ui.inspector.querySelectorAll('[data-flight-mass]').forEach(input => {
       if (document.activeElement !== input) input.value = formatField(this.model.flightSystems.massKg);
@@ -1399,7 +1483,7 @@ export class ModelEditor {
     this._updateSystemMarkers();
     this.fitView();
     this._setSaveStatus('自动已保存', 'saved');
-    showToast('已载入示例飞行器。', { type: 'success' });
+    showToast('已恢复默认飞机模型、操纵布局与按键映射。', { type: 'success' });
   }
 
   fitView() {

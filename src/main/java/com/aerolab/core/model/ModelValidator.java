@@ -49,6 +49,9 @@ public final class ModelValidator {
             validateRange(part.position(), -2000, 2000, part.name() + " 的位置");
             validateRange(part.rotation(), -1080, 1080, part.name() + " 的旋转角");
             validateSize(part);
+            if (!Double.isFinite(part.massKg()) || part.massKg() < 0 || part.massKg() > 100_000) {
+                throw new IllegalArgumentException(part.name() + " 的质量需在 0-100000 kg 之间");
+            }
             if (part.color() == null || !COLOR.matcher(part.color()).matches()) {
                 throw new IllegalArgumentException(part.name() + " 的颜色必须为 #RRGGBB 格式");
             }

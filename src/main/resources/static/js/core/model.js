@@ -22,6 +22,8 @@ export const BINDING_DEFINITIONS = Object.freeze([
   { action: 'pitchDown', label: '低头 / 俯冲', group: '姿态' },
   { action: 'yawLeft', label: '向左偏航', group: '姿态' },
   { action: 'yawRight', label: '向右偏航', group: '姿态' },
+  { action: 'rollLeft', label: '向左滚转', group: '姿态' },
+  { action: 'rollRight', label: '向右滚转', group: '姿态' },
   { action: 'brake', label: '刹车 / 减速', group: '辅助' },
   { action: 'toggleCamera', label: '切换视角', group: '驾驶' },
   { action: 'resetFlight', label: '重新起飞', group: '驾驶' },
@@ -35,6 +37,8 @@ export const DEFAULT_BINDINGS = Object.freeze({
   pitchDown: 'ArrowDown',
   yawLeft: 'ArrowLeft',
   yawRight: 'ArrowRight',
+  rollLeft: 'KeyA',
+  rollRight: 'KeyD',
   boost: 'ShiftLeft',
   brake: 'KeyB',
   toggleCamera: 'KeyC',
@@ -73,6 +77,8 @@ export function createPart(shape, overrides = {}) {
     position: { x: 0, y: 0, z: 0, ...overrides.position },
     rotation: { ...info.rotation, ...overrides.rotation },
     size: { ...info.size, ...overrides.size },
+    massKg: Math.max(0, Number(overrides.massKg) || 0),
+    liftingSurface: Boolean(overrides.liftingSurface),
     color: overrides.color ?? PART_COLORS[Math.floor(Math.random() * PART_COLORS.length)]
   };
 }
@@ -81,19 +87,19 @@ export function createDefaultFlightSystems() {
   return {
     massKg: 1350,
     engines: [
-      { id: 'sys-engine-left', name: '左引擎', position: vec3(0.35, -0.44, -1.85), maxThrustN: 4200 },
-      { id: 'sys-engine-right', name: '右引擎', position: vec3(0.35, -0.44, 1.85), maxThrustN: 4200 }
+      { id: 'sys-engine-left', name: '左引擎', position: vec3(0.35, -0.44, -1.85), maxThrustN: 4200, massKg: 165 },
+      { id: 'sys-engine-right', name: '右引擎', position: vec3(0.35, -0.44, 1.85), maxThrustN: 4200, massKg: 165 }
     ],
     horizontalRudders: [
-      { id: 'sys-elevator-left', name: '左升降舵', position: vec3(-2.55, 0.13, -0.9) },
-      { id: 'sys-elevator-right', name: '右升降舵', position: vec3(-2.55, 0.13, 0.9) }
+      { id: 'sys-elevator-left', name: '左升降舵', position: vec3(-2.55, 0.13, -0.9), areaM2: 0.9, massKg: 18 },
+      { id: 'sys-elevator-right', name: '右升降舵', position: vec3(-2.55, 0.13, 0.9), areaM2: 0.9, massKg: 18 }
     ],
     verticalRudders: [
-      { id: 'sys-rudder-main', name: '方向舵', position: vec3(-2.45, 0.65, 0) }
+      { id: 'sys-rudder-main', name: '方向舵', position: vec3(-2.45, 0.65, 0), areaM2: 0.8, massKg: 14 }
     ],
     guns: [
-      { id: 'sys-gun-left', name: '左机炮', position: vec3(3.05, 0, -0.18) },
-      { id: 'sys-gun-right', name: '右机炮', position: vec3(3.05, 0, 0.18) }
+      { id: 'sys-gun-left', name: '左机炮', position: vec3(3.05, 0, -0.18), massKg: 25 },
+      { id: 'sys-gun-right', name: '右机炮', position: vec3(3.05, 0, 0.18), massKg: 25 }
     ]
   };
 }
@@ -107,57 +113,70 @@ export function createDemoAircraft() {
     {
       id: 'airframe-fuselage', name: '机身', shape: 'CYLINDER',
       position: vec3(0, 0, 0), rotation: vec3(0, 0, -90), size: vec3(1.05, 4.8, 1.05),
-      color: '#c9d7df'
+      color: '#c9d7df',
+      massKg: 430
     },
     {
       id: 'airframe-nose', name: '机鼻', shape: 'CONE',
       position: vec3(2.95, 0, 0), rotation: vec3(0, 0, -90), size: vec3(1.05, 1.1, 1.05),
-      color: '#a9bcc7'
+      color: '#a9bcc7',
+      massKg: 55
     },
     {
       id: 'airframe-tailcone', name: '尾锥', shape: 'CONE',
       position: vec3(-2.45, 0, 0), rotation: vec3(0, 0, 90), size: vec3(0.8, 0.8, 0.8),
-      color: '#a9bcc7'
+      color: '#a9bcc7',
+      massKg: 45
     },
     {
       id: 'wing-left', name: '左主翼', shape: 'BOX',
-      position: vec3(0.15, 0.06, -2.4), rotation: vec3(2.5, 0, 0), size: vec3(1.75, 0.12, 4.8),
-      color: '#35c6b1'
+      position: vec3(-0.15, 0.06, -2.4), rotation: vec3(2.5, 0, 0), size: vec3(1.75, 0.12, 4.8),
+      color: '#35c6b1',
+      massKg: 125,
+      liftingSurface: true
     },
     {
       id: 'wing-right', name: '右主翼', shape: 'BOX',
-      position: vec3(0.15, 0.06, 2.4), rotation: vec3(-2.5, 0, 0), size: vec3(1.75, 0.12, 4.8),
-      color: '#35c6b1'
+      position: vec3(-0.15, 0.06, 2.4), rotation: vec3(-2.5, 0, 0), size: vec3(1.75, 0.12, 4.8),
+      color: '#35c6b1',
+      massKg: 125,
+      liftingSurface: true
     },
     {
       id: 'engine-left', name: '左引擎短舱', shape: 'CYLINDER',
       position: vec3(0.35, -0.44, -1.85), rotation: vec3(0, 0, -90), size: vec3(0.5, 1.75, 0.5),
-      color: '#405462'
+      color: '#405462',
+      massKg: 30
     },
     {
       id: 'engine-right', name: '右引擎短舱', shape: 'CYLINDER',
       position: vec3(0.35, -0.44, 1.85), rotation: vec3(0, 0, -90), size: vec3(0.5, 1.75, 0.5),
-      color: '#405462'
+      color: '#405462',
+      massKg: 30
     },
     {
       id: 'tail-plane', name: '水平尾翼', shape: 'BOX',
       position: vec3(-2.28, 0.12, 0), rotation: vec3(0, 0, 0), size: vec3(0.92, 0.08, 3.0),
-      color: '#2eab99'
+      color: '#2eab99',
+      massKg: 35,
+      liftingSurface: true
     },
     {
       id: 'tail-fin', name: '垂直尾翼', shape: 'BOX',
       position: vec3(-2.18, 0.6, 0), rotation: vec3(0, 0, 0), size: vec3(0.96, 1.12, 0.08),
-      color: '#4ac8b3'
+      color: '#4ac8b3',
+      massKg: 20
     },
     {
       id: 'canopy', name: '座舱盖', shape: 'ELLIPSOID',
       position: vec3(1.22, 0.53, 0), rotation: vec3(0, 0, 0), size: vec3(0.98, 0.38, 0.58),
-      color: '#123d49'
+      color: '#123d49',
+      massKg: 25
     }
   ];
 
   return {
-    version: 2,
+    version: 3,
     name: 'AEROLAB X-01',
     parts,
     cockpit: {
@@ -195,7 +214,7 @@ export function normalizeAircraft(raw) {
     pitchDegrees: clampNumber(cockpitSource.pitchDegrees, -89, 89, -4)
   };
   return {
-    version: 2,
+    version: 3,
     name: normalizeText(source.name, '未命名飞行器', 80),
     parts,
     cockpit,
@@ -208,7 +227,7 @@ export function buildAircraftExport(model) {
   const normalized = normalizeAircraft(model);
   return JSON.stringify({
     format: 'aerolab-aircraft',
-    version: 2,
+    version: 3,
     exportedAt: new Date().toISOString(),
     ...normalized
   }, null, 2);
@@ -335,6 +354,8 @@ function normalizeParts(rawParts) {
       position: normalizeVector(raw.position, vec3(0, 0, 0), -2000, 2000),
       rotation: normalizeVector(raw.rotation, SHAPE_INFO[raw.shape].rotation, -1080, 1080),
       size: normalizeVector(raw.size, SHAPE_INFO[raw.shape].size, 0.02, 100),
+      massKg: clampNumber(raw.massKg, 0, 100000, 0),
+      liftingSurface: normalizeLiftingSurface(raw),
       color: COLOR_PATTERN.test(raw.color ?? '') ? raw.color : PART_COLORS[0]
     });
   }
@@ -359,7 +380,8 @@ function normalizeEngineList(raw) {
     id: uniqueSystemId(item?.id, 'engine', index, seen),
     name: normalizeText(item?.name, `引擎 ${index + 1}`, 60),
     position: normalizeVector(item?.position, vec3(0, 0, 0), -2000, 2000),
-    maxThrustN: clampNumber(item?.maxThrustN, 0, 200000, 4200)
+    maxThrustN: clampNumber(item?.maxThrustN, 0, 200000, 4200),
+    massKg: clampNumber(item?.massKg, 0, 100000, 0)
   }));
 }
 
@@ -369,7 +391,9 @@ function normalizeSurfaceList(raw, prefix) {
   return raw.slice(0, 12).map((item, index) => ({
     id: uniqueSystemId(item?.id, prefix, index, seen),
     name: normalizeText(item?.name, prefix === 'elevator' ? `水平舵 ${index + 1}` : `垂直舵 ${index + 1}`, 60),
-    position: normalizeVector(item?.position, vec3(0, 0, 0), -2000, 2000)
+    position: normalizeVector(item?.position, vec3(0, 0, 0), -2000, 2000),
+    areaM2: clampNumber(item?.areaM2, 0.01, 500, prefix === 'elevator' ? 0.9 : 0.8),
+    massKg: clampNumber(item?.massKg, 0, 100000, 0)
   }));
 }
 
@@ -379,7 +403,8 @@ function normalizeGunList(raw) {
   return raw.slice(0, 16).map((item, index) => ({
     id: uniqueSystemId(item?.id, 'gun', index, seen),
     name: normalizeText(item?.name, `机炮 ${index + 1}`, 60),
-    position: normalizeVector(item?.position, vec3(0, 0, 0), -2000, 2000)
+    position: normalizeVector(item?.position, vec3(0, 0, 0), -2000, 2000),
+    massKg: clampNumber(item?.massKg, 0, 100000, 0)
   }));
 }
 
@@ -388,6 +413,20 @@ function uniqueSystemId(rawId, prefix, index, seen) {
   if (seen.has(id)) id = uid(prefix);
   seen.add(id);
   return id;
+}
+
+function normalizeLiftingSurface(raw) {
+  if (typeof raw.liftingSurface === 'boolean') return raw.liftingSurface;
+  const shape = raw.shape;
+  if (shape !== 'BOX' && shape !== 'ELLIPSOID') return false;
+  const size = raw.size ?? {};
+  const x = Number(size.x) || 1;
+  const y = Number(size.y) || 1;
+  const z = Number(size.z) || 1;
+  const label = `${raw.name ?? ''} ${raw.id ?? ''}`.toLowerCase();
+  if (/垂直尾翼|垂尾|fin|rudder/.test(label)) return false;
+  if (/主翼|机翼|尾翼|wing|tail|stab/.test(label)) return true;
+  return y < Math.min(x, z) * 0.45 && z > x * 0.8;
 }
 
 function normalizeBindings(raw) {

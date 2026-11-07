@@ -35,8 +35,8 @@ public class FlightSessionManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(FlightSessionManager.class);
     private static final double FIXED_STEP_SECONDS = 1.0 / 60.0;
-    private static final int TELEMETRY_EVERY_TICKS = 2;
-    private static final int MAX_CHUNKS_PER_UPDATE = 12;
+    private static final int TELEMETRY_EVERY_TICKS = 1;
+    private static final int MAX_CHUNKS_PER_UPDATE = 4;
     private static final int SEND_BUFFER_BYTES = 8 * 1024 * 1024;
 
     private final ObjectMapper objectMapper;
@@ -57,7 +57,7 @@ public class FlightSessionManager {
     @PostConstruct
     void startLoop() {
         if (running.compareAndSet(false, true)) {
-            loop.scheduleAtFixedRate(this::tickAll, 0, 16, TimeUnit.MILLISECONDS);
+            loop.scheduleAtFixedRate(this::tickAll, 0, 16_666_667, TimeUnit.NANOSECONDS);
         }
     }
 

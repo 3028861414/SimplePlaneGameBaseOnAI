@@ -2,6 +2,7 @@ import { ModelStore } from './core/model.js';
 import { ModelEditor } from './modeling/model-editor.js';
 import { SimulationView } from './simulation/simulation-view.js';
 import { FlightView } from './flight/flight-view.js';
+import { AxisGizmo } from './core/axis-gizmo.js';
 
 class AerolabApp {
   constructor() {
@@ -15,6 +16,7 @@ class AerolabApp {
     this.headerTitle = document.querySelector('#header-title');
     this.headerContext = document.querySelector('#header-context');
     this.stage = document.querySelector('#stage');
+    this.axisGizmo = new AxisGizmo(document.querySelector('#axis-gizmo'));
     this.store.subscribe(() => this._updateModelContext());
   }
 
@@ -23,6 +25,12 @@ class AerolabApp {
       button.addEventListener('click', () => this.activate(button.dataset.view));
     });
     window.addEventListener('beforeunload', () => this.store.flush());
+    this._renderAxis = () => {
+      const camera = this.view?.viewport?.camera ?? this.view?.scene?.viewport?.camera;
+      if (camera) this.axisGizmo.render(camera);
+      this._axisFrame = requestAnimationFrame(this._renderAxis);
+    };
+    this._axisFrame = requestAnimationFrame(this._renderAxis);
     this.activate('modeling');
     document.querySelector('#boot-screen')?.classList.add('is-dismissed');
     setTimeout(() => document.querySelector('#boot-screen')?.remove(), 650);

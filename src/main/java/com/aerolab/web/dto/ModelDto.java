@@ -20,7 +20,9 @@ public record ModelDto(
             Vec3Dto position,
             Vec3Dto rotation,
             Vec3Dto size,
-            String color
+            String color,
+            Double massKg,
+            Boolean liftingSurface
     ) {
     }
 

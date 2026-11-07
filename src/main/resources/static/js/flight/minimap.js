@@ -4,12 +4,17 @@ export class FlightMinimap {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.size = canvas.width;
+    this.size = 128;
+    this.outputSize = canvas.width;
+    this._mapCanvas = document.createElement('canvas');
+    this._mapCanvas.width = this.size;
+    this._mapCanvas.height = this.size;
+    this._mapCtx = this._mapCanvas.getContext('2d');
     this.chunks = new Map();
     this.chunkSize = 512;
     this.radius = 3;
     this._lastDraw = 0;
-    this._image = this.ctx.createImageData(this.size, this.size);
+    this._image = this._mapCtx.createImageData(this.size, this.size);
     this._state = null;
   }
 
@@ -21,7 +26,7 @@ export class FlightMinimap {
       this.radius = mapData.radius;
     }
     const now = performance.now();
-    if (now - this._lastDraw < 180) return;
+    if (now - this._lastDraw < 220) return;
     this._lastDraw = now;
     this._draw(state);
   }
@@ -36,6 +41,8 @@ export class FlightMinimap {
     const ctx = this.ctx;
     const size = this.size;
     const center = size * 0.5;
+    const out = this.outputSize;
+    const outCenter = out * 0.5;
     const visibleRadius = Math.max(640, this.chunkSize * (this.radius + 0.8));
     const scale = center / visibleRadius;
     const position = state.position;
@@ -43,20 +50,20 @@ export class FlightMinimap {
 
     if (this.chunks.size === 0) {
       ctx.fillStyle = '#07141a';
-      ctx.fillRect(0, 0, size, size);
+      ctx.fillRect(0, 0, out, out);
       ctx.fillStyle = 'rgba(112, 157, 158, 0.7)';
       ctx.font = '12px "SFMono-Regular", monospace';
       ctx.textAlign = 'center';
-      ctx.fillText('等待地形区块', center, center);
+      ctx.fillText('等待地形区块', out / 2, out / 2);
       return;
     }
 
     const sample = (worldX, worldZ) => this._sampleHeight(worldX, worldZ);
 
     for (let py = 0; py < size; py++) {
-      const worldZ = position.z + (py - center) / scale;
+      const worldX = position.x + (center - py) / scale;
       for (let px = 0; px < size; px++) {
-        const worldX = position.x - (px - center) / scale;
+        const worldZ = position.z + (px - center) / scale;
         const height = sample(worldX, worldZ);
         const index = (py * size + px) * 4;
         if (height === null) {
@@ -83,30 +90,33 @@ export class FlightMinimap {
         data[index + 3] = 255;
       }
     }
-    ctx.putImageData(this._image, 0, 0);
+    this._mapCtx.putImageData(this._image, 0, 0);
+    ctx.clearRect(0, 0, out, out);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(this._mapCanvas, 0, 0, out, out);
 
     ctx.strokeStyle = 'rgba(197, 224, 218, 0.18)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.arc(center, center, center * 0.46, 0, Math.PI * 2);
+    ctx.arc(outCenter, outCenter, outCenter * 0.46, 0, Math.PI * 2);
     ctx.stroke();
     ctx.beginPath();
-    ctx.arc(center, center, center * 0.8, 0, Math.PI * 2);
+    ctx.arc(outCenter, outCenter, outCenter * 0.8, 0, Math.PI * 2);
     ctx.stroke();
 
     ctx.fillStyle = 'rgba(232, 250, 244, 0.86)';
     ctx.font = 'bold 10px "SFMono-Regular", monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('N', center, 14);
+    ctx.fillText('N', outCenter, 14);
     ctx.beginPath();
-    ctx.moveTo(center, 19);
-    ctx.lineTo(center - 3, 25);
-    ctx.lineTo(center + 3, 25);
+    ctx.moveTo(outCenter, 19);
+    ctx.lineTo(outCenter - 3, 25);
+    ctx.lineTo(outCenter + 3, 25);
     ctx.closePath();
     ctx.fill();
 
     ctx.save();
-    ctx.translate(center, center);
+    ctx.translate(outCenter, outCenter);
     ctx.rotate((state.headingDeg * Math.PI) / 180);
     ctx.fillStyle = '#fff3c9';
     ctx.strokeStyle = 'rgba(8, 24, 29, 0.9)';
@@ -123,7 +133,7 @@ export class FlightMinimap {
 
     ctx.strokeStyle = 'rgba(255, 243, 201, 0.4)';
     ctx.beginPath();
-    ctx.arc(center, center, 12, 0, Math.PI * 2);
+    ctx.arc(outCenter, outCenter, 12, 0, Math.PI * 2);
     ctx.stroke();
   }
 

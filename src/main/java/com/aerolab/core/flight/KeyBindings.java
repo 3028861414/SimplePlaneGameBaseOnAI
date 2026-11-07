@@ -12,6 +12,8 @@ public record KeyBindings(Map<String, String> bindings) {
     public static final String PITCH_DOWN = "pitchDown";
     public static final String YAW_LEFT = "yawLeft";
     public static final String YAW_RIGHT = "yawRight";
+    public static final String ROLL_LEFT = "rollLeft";
+    public static final String ROLL_RIGHT = "rollRight";
     public static final String BOOST = "boost";
     public static final String BRAKE = "brake";
     public static final String TOGGLE_CAMERA = "toggleCamera";
@@ -20,7 +22,7 @@ public record KeyBindings(Map<String, String> bindings) {
 
     public static final Set<String> ACTIONS = Set.of(
             THROTTLE_UP, THROTTLE_DOWN, PITCH_UP, PITCH_DOWN, YAW_LEFT, YAW_RIGHT,
-            BOOST, BRAKE, TOGGLE_CAMERA, RESET_FLIGHT, FIRE_GUNS
+            ROLL_LEFT, ROLL_RIGHT, BOOST, BRAKE, TOGGLE_CAMERA, RESET_FLIGHT, FIRE_GUNS
     );
 
     private static final Map<String, String> DEFAULTS = Map.ofEntries(
@@ -30,6 +32,8 @@ public record KeyBindings(Map<String, String> bindings) {
             Map.entry(PITCH_DOWN, "ArrowDown"),
             Map.entry(YAW_LEFT, "ArrowLeft"),
             Map.entry(YAW_RIGHT, "ArrowRight"),
+            Map.entry(ROLL_LEFT, "KeyA"),
+            Map.entry(ROLL_RIGHT, "KeyD"),
             Map.entry(BOOST, "ShiftLeft"),
             Map.entry(BRAKE, "KeyB"),
             Map.entry(TOGGLE_CAMERA, "KeyC"),

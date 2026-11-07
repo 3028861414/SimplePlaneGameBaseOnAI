@@ -29,7 +29,8 @@ export class SectionPlane {
     this.texture = null;
     this.material = new THREE.MeshBasicMaterial({
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.78,
+      alphaTest: 0.015,
       side: THREE.DoubleSide,
       depthWrite: false,
       toneMapped: false
@@ -43,7 +44,7 @@ export class SectionPlane {
     ]);
     this.border = new THREE.LineLoop(
       this.borderGeometry,
-      new THREE.LineBasicMaterial({ color: 0xffb166, transparent: true, opacity: 0.55, depthTest: false })
+      new THREE.LineBasicMaterial({ color: 0xffb166, transparent: true, opacity: 0.82, depthTest: false })
     );
     this.border.renderOrder = 9;
     this.group.add(this.border);
@@ -156,6 +157,7 @@ export class SectionPlane {
     const data = new Uint8Array(width * height * 4);
     const normValues = new Float32Array(width * height).fill(Number.NaN);
     const array = this.metric === 'speed' ? this.field.speed : this.field.cp;
+    const fallback = this.metric === 'speed' ? speedColor(0) : pressureColor(0.5);
 
     for (let py = 0; py < height; py++) {
       const v = py / Math.max(height - 1, 1);
@@ -167,6 +169,9 @@ export class SectionPlane {
         const value = this.field.sampleScalar(point, array);
         const pixel = (py * width + px) * 4;
         if (value === null) {
+          data[pixel] = Math.round(fallback[0]);
+          data[pixel + 1] = Math.round(fallback[1]);
+          data[pixel + 2] = Math.round(fallback[2]);
           data[pixel + 3] = 0;
           continue;
         }
@@ -178,11 +183,10 @@ export class SectionPlane {
             );
         normValues[py * width + px] = norm;
         const rgb = this.metric === 'speed' ? speedColor(norm) : pressureColor(norm);
-        const edgeFade = Math.min(1, Math.min(u, 1 - u) * 9, Math.min(v, 1 - v) * 9);
         data[pixel] = Math.round(rgb[0]);
         data[pixel + 1] = Math.round(rgb[1]);
         data[pixel + 2] = Math.round(rgb[2]);
-        data[pixel + 3] = Math.round(225 * edgeFade);
+        data[pixel + 3] = 235;
       }
     }
 

@@ -47,17 +47,35 @@ public final class FlightMapper {
                                 engine.id(),
                                 engine.name(),
                                 toVec3(engine.position()),
-                                engine.maxThrustN()
+                                engine.maxThrustN(),
+                                engine.massKg() == null ? 165 : engine.massKg()
                         ))
                         .toList(),
                 dto.horizontalRudders() == null ? List.of() : dto.horizontalRudders().stream()
-                        .map(surface -> new ControlSurfaceSpec(surface.id(), surface.name(), toVec3(surface.position())))
+                        .map(surface -> new ControlSurfaceSpec(
+                                surface.id(),
+                                surface.name(),
+                                toVec3(surface.position()),
+                                surface.areaM2() == null ? 0.9 : surface.areaM2(),
+                                surface.massKg() == null ? 18 : surface.massKg()
+                        ))
                         .toList(),
                 dto.verticalRudders() == null ? List.of() : dto.verticalRudders().stream()
-                        .map(surface -> new ControlSurfaceSpec(surface.id(), surface.name(), toVec3(surface.position())))
+                        .map(surface -> new ControlSurfaceSpec(
+                                surface.id(),
+                                surface.name(),
+                                toVec3(surface.position()),
+                                surface.areaM2() == null ? 0.8 : surface.areaM2(),
+                                surface.massKg() == null ? 14 : surface.massKg()
+                        ))
                         .toList(),
                 dto.guns() == null ? List.of() : dto.guns().stream()
-                        .map(gun -> new GunSpec(gun.id(), gun.name(), toVec3(gun.position())))
+                        .map(gun -> new GunSpec(
+                                gun.id(),
+                                gun.name(),
+                                toVec3(gun.position()),
+                                gun.massKg() == null ? 25 : gun.massKg()
+                        ))
                         .toList(),
                 dto.massKg()
         );

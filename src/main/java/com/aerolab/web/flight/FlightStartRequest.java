@@ -26,21 +26,25 @@ public record FlightStartRequest(
             String id,
             String name,
             ModelDto.Vec3Dto position,
-            double maxThrustN
+            double maxThrustN,
+            Double massKg
     ) {
     }
 
     public record ControlSurfaceDto(
             String id,
             String name,
-            ModelDto.Vec3Dto position
+            ModelDto.Vec3Dto position,
+            Double areaM2,
+            Double massKg
     ) {
     }
 
     public record GunDto(
             String id,
             String name,
-            ModelDto.Vec3Dto position
+            ModelDto.Vec3Dto position,
+            Double massKg
     ) {
     }
 }

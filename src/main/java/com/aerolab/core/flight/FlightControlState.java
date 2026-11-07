@@ -8,6 +8,8 @@ public final class FlightControlState {
     private boolean pitchDown;
     private boolean yawLeft;
     private boolean yawRight;
+    private boolean rollLeft;
+    private boolean rollRight;
     private boolean boost;
     private boolean brake;
 
@@ -19,6 +21,8 @@ public final class FlightControlState {
         if (code.equals(bindings.codeFor(KeyBindings.PITCH_DOWN))) pitchDown = pressed;
         if (code.equals(bindings.codeFor(KeyBindings.YAW_LEFT))) yawLeft = pressed;
         if (code.equals(bindings.codeFor(KeyBindings.YAW_RIGHT))) yawRight = pressed;
+        if (code.equals(bindings.codeFor(KeyBindings.ROLL_LEFT))) rollLeft = pressed;
+        if (code.equals(bindings.codeFor(KeyBindings.ROLL_RIGHT))) rollRight = pressed;
         if (code.equals(bindings.codeFor(KeyBindings.BOOST))) boost = pressed;
         if (code.equals(bindings.codeFor(KeyBindings.BRAKE))) brake = pressed;
     }
@@ -30,6 +34,8 @@ public final class FlightControlState {
         pitchDown = false;
         yawLeft = false;
         yawRight = false;
+        rollLeft = false;
+        rollRight = false;
         boost = false;
         brake = false;
     }
@@ -44,6 +50,10 @@ public final class FlightControlState {
 
     public double yawDirection() {
         return (yawRight ? 1 : 0) - (yawLeft ? 1 : 0);
+    }
+
+    public double rollDirection() {
+        return (rollRight ? 1 : 0) - (rollLeft ? 1 : 0);
     }
 
     public boolean boost() {

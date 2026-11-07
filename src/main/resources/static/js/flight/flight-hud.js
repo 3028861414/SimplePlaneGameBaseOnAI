@@ -94,6 +94,8 @@ export class FlightHud {
             ${this._bindingRow(bindings, 'pitchDown', '低头')}
             ${this._bindingRow(bindings, 'yawLeft', '左偏航')}
             ${this._bindingRow(bindings, 'yawRight', '右偏航')}
+            ${this._bindingRow(bindings, 'rollLeft', '左滚转')}
+            ${this._bindingRow(bindings, 'rollRight', '右滚转')}
             ${this._bindingRow(bindings, 'boost', '加力')}
             ${this._bindingRow(bindings, 'brake', '刹车')}
             ${this._bindingRow(bindings, 'toggleCamera', '切换视角')}
@@ -168,6 +170,9 @@ export class FlightHud {
                 ${Array.from({ length: Math.max(1, engineCount) }, () => '<i></i>').join('')}
               </div>
               <span class="g-load">G <b data-gload>1.0</b></span>
+              <span class="g-load">AOA <b data-aoa>0°</b></span>
+              <span class="g-load">LIFT <b data-lift>0 kN</b></span>
+              <span class="g-load">MASS <b data-mass>0 kg</b></span>
             </div>
             <span class="instrument-label">动力 / ENGINE</span>
           </div>
@@ -226,6 +231,10 @@ export class FlightHud {
       throttleRing: this.overlayHost.querySelector('[data-throttle-ring]'),
       thrust: this.overlayHost.querySelector('[data-thrust]'),
       gLoad: this.overlayHost.querySelector('[data-gload]'),
+      aoa: this.overlayHost.querySelector('[data-aoa]'),
+      lift: this.overlayHost.querySelector('[data-lift]'),
+      mass: this.overlayHost.querySelector('[data-mass]'),
+      drag: this.overlayHost.querySelector('[data-drag]'),
       engineLights: [...this.overlayHost.querySelectorAll('.engine-lights i')],
       crash: this.overlayHost.querySelector('[data-flight-crash]'),
       crashTitle: this.overlayHost.querySelector('[data-crash-title]'),
@@ -274,7 +283,7 @@ export class FlightHud {
     const tickWidth = 14;
     for (let degree = 0; degree <= 1080; degree += 10) {
       const normalized = degree % 360;
-      const cardinal = normalized % 90 === 0 ? CARDINALS[normalized / 90] : '';
+      const cardinal = normalized % 90 === 0 ? CARDINALS[(normalized / 90) * 2] : '';
       const major = normalized % 30 === 0;
       markup += `<span class="heading-tick ${major ? 'is-major' : ''} ${cardinal ? 'is-cardinal' : ''}" style="width:${tickWidth}px">${cardinal || (major ? String(normalized).padStart(3, '0') : '')}</span>`;
     }
@@ -370,6 +379,9 @@ export class FlightHud {
     this.ui.throttleRing.style.setProperty('--throttle-angle', `${Math.round(state.throttle * 360)}deg`);
     this.ui.thrust.textContent = `${formatNumber(state.engineThrustN / 1000, 1)} kN`;
     this.ui.gLoad.textContent = formatNumber(state.gLoad, 1);
+    this.ui.aoa.textContent = `${formatNumber(state.angleOfAttackDeg ?? 0, 1)}°`;
+    this.ui.lift.textContent = `${formatNumber((state.liftN ?? 0) / 1000, 1)} kN`;
+    this.ui.mass.textContent = `${formatNumber(state.massKg ?? 0, 0)} kg`;
     this.ui.engineLights.forEach(light => {
       light.style.opacity = String(0.18 + state.throttle * 0.82);
     });

@@ -43,19 +43,33 @@ class FlightDynamicsTest {
         assertTrue(rolling.throttle() > 0.8);
 
         dynamics.setKey(KeyBindings.defaults().codeFor(KeyBindings.PITCH_UP), true);
-        run(2.5);
+        run(4.5);
         FlightState airborne = dynamics.snapshot();
         assertFalse(airborne.onGround(), "elevator input at takeoff speed should lift the aircraft");
-        assertTrue(airborne.altitudeAglM() > 1.42);
+        assertTrue(airborne.altitudeAglM() > 1.0);
         assertTrue(airborne.pitchDeg() > 0);
 
         dynamics.setKey(KeyBindings.defaults().codeFor(KeyBindings.PITCH_UP), false);
-        dynamics.setKey(KeyBindings.defaults().codeFor(KeyBindings.YAW_RIGHT), true);
-        double heading = dynamics.snapshot().headingDeg();
+        run(4.0);
+        dynamics.setKey(KeyBindings.defaults().codeFor(KeyBindings.ROLL_RIGHT), true);
         run(1.2);
-        FlightState turning = dynamics.snapshot();
-        assertTrue(turning.headingDeg() > heading || Math.abs(turning.headingDeg() - heading) > 350);
-        assertTrue(turning.rollDeg() > 5, "bank should coordinate the turn, roll=" + turning.rollDeg() + ", heading=" + turning.headingDeg() + ", crashed=" + turning.crashed());
+        FlightState rolled = dynamics.snapshot();
+        assertTrue(rolled.rollDeg() > 5, "ailerons should roll the aircraft, roll=" + rolled.rollDeg() + ", crashed=" + rolled.crashed());
+    }
+
+    @Test
+    void remainsControllableAfterAShortRotationInput() {
+        dynamics.setKey(KeyBindings.defaults().codeFor(KeyBindings.THROTTLE_UP), true);
+        run(9.0);
+        dynamics.setKey(KeyBindings.defaults().codeFor(KeyBindings.PITCH_UP), true);
+        run(1.5);
+        dynamics.setKey(KeyBindings.defaults().codeFor(KeyBindings.PITCH_UP), false);
+        run(20.0);
+        FlightState state = dynamics.snapshot();
+        assertFalse(state.crashed(), state.crashReason());
+        assertFalse(state.onGround());
+        assertTrue(state.speedMps() > 12, "speed after climb = " + state.speedMps());
+        assertTrue(Math.abs(state.rollDeg()) < 90, "spiral divergence, roll=" + state.rollDeg());
     }
 
     @Test

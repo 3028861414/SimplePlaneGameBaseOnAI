@@ -21,7 +21,7 @@ class SimplifiedAerodynamicSimulatorTest {
 
         SimulationResult result = simulator.simulate(model, conditions);
 
-        assertEquals(4, result.surfaces().size());
+        assertEquals(model.parts().size(), result.surfaces().size());
         assertTrue(result.computeTimeMs() >= 0);
         assertEquals(38, result.conditions().windSpeedMps());
         assertEquals(0.5 * 1.225 * 38 * 38, result.summary().dynamicPressurePa(), 1e-9);

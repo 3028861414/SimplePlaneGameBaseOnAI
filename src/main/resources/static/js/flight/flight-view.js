@@ -6,7 +6,8 @@ import { FlightSocket } from './flight-socket.js';
 import { FlightHud } from './flight-hud.js';
 
 const SERVER_CONTROL_ACTIONS = new Set([
-  'throttleUp', 'throttleDown', 'pitchUp', 'pitchDown', 'yawLeft', 'yawRight', 'boost', 'brake'
+  'throttleUp', 'throttleDown', 'pitchUp', 'pitchDown', 'yawLeft', 'yawRight',
+  'rollLeft', 'rollRight', 'boost', 'brake'
 ]);
 const CHUNK_RADIUS_KEY = 'aerolab.flight.chunk-radius.v1';
 const DEFAULT_CHUNK_RADIUS = 3;
@@ -109,7 +110,7 @@ export class FlightView {
     });
     this.hud.hideLoading();
     this.hud.update(state, this.scene.getMapData());
-    this._setLinkState('实时飞行 · 30 Hz', 'live');
+    this._setLinkState('实时飞行 · 60 Hz', 'live');
     this.hud.setNotice('滑行起飞：增加油门，达到起飞速度后抬头', { duration: 4200 });
     this.scene.viewport.resize();
   }
@@ -117,6 +118,9 @@ export class FlightView {
   _onState(state) {
     if (this._disposed || !this._ready) return;
     this.scene.pushState(state);
+    const now = performance.now();
+    if (now - (this._hudUpdatedAt ?? 0) < 50) return;
+    this._hudUpdatedAt = now;
     this.hud.update(state, this.scene.getMapData());
   }
 

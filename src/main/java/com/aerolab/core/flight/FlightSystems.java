@@ -20,4 +20,11 @@ public record FlightSystems(
     public double totalMaxThrustN() {
         return engines.stream().mapToDouble(EngineSpec::maxThrustN).sum();
     }
+
+    public double equipmentMassKg() {
+        return engines.stream().mapToDouble(EngineSpec::massKg).sum()
+                + horizontalRudders.stream().mapToDouble(ControlSurfaceSpec::massKg).sum()
+                + verticalRudders.stream().mapToDouble(ControlSurfaceSpec::massKg).sum()
+                + guns.stream().mapToDouble(GunSpec::massKg).sum();
+    }
 }

@@ -42,10 +42,13 @@ export class FlightWorldScene {
     this.currentQuaternion = new THREE.Quaternion();
     this.cameraLookTarget = new THREE.Vector3();
     this.stateBuffer = [];
-    this.interpolationDelaySeconds = 0.1;
+    this.interpolationDelaySeconds = 0.07;
+    this.renderClockSeconds = null;
     this.sunBase = new THREE.Vector3(-1200, 2100, 800);
     this.sunSpriteBase = new THREE.Vector3(-4200, 5000, 2900);
     this._events = new AbortController();
+    this._disposed = false;
+    this._chunkDrainScheduled = false;
 
     this.chunkMaterials = {
       terrain: new THREE.MeshStandardMaterial({
@@ -135,6 +138,9 @@ export class FlightWorldScene {
   _buildAircraft() {
     this.aircraft = new THREE.Group();
     this.aircraft.name = 'flight-aircraft';
+    this.aircraftModel = new THREE.Group();
+    this.aircraftModel.name = 'flight-aircraft-model';
+    this.centerOfMass = new THREE.Vector3();
     for (const part of this.model.parts) {
       const geometry = makeUnitGeometry(part.shape);
       const canopy = (part.name ?? '').includes('舱') || String(part.color).toLowerCase() === '#123d49';
@@ -154,8 +160,9 @@ export class FlightWorldScene {
         THREE.MathUtils.degToRad(part.rotation.z)
       );
       mesh.scale.set(part.size.x, part.size.y, part.size.z);
-      this.aircraft.add(mesh);
+      this.aircraftModel.add(mesh);
     }
+    this.aircraft.add(this.aircraftModel);
     this.aircraft.visible = false;
     this.scene.add(this.aircraft);
   }
@@ -224,6 +231,23 @@ export class FlightWorldScene {
     if (this.queuedChunkKeys.has(key)) return;
     this.queuedChunkKeys.add(key);
     this.chunkQueue.push(dto);
+    this._scheduleChunkDrain();
+  }
+
+  _scheduleChunkDrain() {
+    if (this._chunkDrainScheduled || this.chunkQueue.length === 0) return;
+    this._chunkDrainScheduled = true;
+    const drain = () => {
+      this._chunkDrainScheduled = false;
+      if (this._disposed || this.chunkQueue.length === 0) return;
+      this._processChunkQueue(1);
+      if (this.chunkQueue.length > 0) this._scheduleChunkDrain();
+    };
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(drain, { timeout: 120 });
+    } else {
+      window.setTimeout(drain, 0);
+    }
   }
 
   _processChunkQueue(limit = 2) {
@@ -410,6 +434,12 @@ export class FlightWorldScene {
     return top + (bottom - top) * fz;
   }
 
+  _applyCenterOfMass(state) {
+    const com = state.centerOfMass ?? { x: 0, y: 0, z: 0 };
+    this.centerOfMass.set(com.x ?? 0, com.y ?? 0, com.z ?? 0);
+    this.aircraftModel.position.copy(this.centerOfMass).multiplyScalar(-1);
+  }
+
   _sampleState(state) {
     return {
       position: new THREE.Vector3(state.position.x, state.position.y, state.position.z),
@@ -428,10 +458,12 @@ export class FlightWorldScene {
 
   setInitialState(state) {
     this.state = state;
+    this._applyCenterOfMass(state);
     const sample = this._sampleState(state);
     this.stateBuffer = [sample];
     this.currentPosition.copy(sample.position);
     this.currentQuaternion.copy(sample.quaternion);
+    this.renderClockSeconds = sample.serverTime - this.interpolationDelaySeconds;
     this.aircraft.position.copy(sample.position);
     this.aircraft.quaternion.copy(sample.quaternion);
     this.aircraft.visible = this.cameraMode === 'third';
@@ -447,6 +479,7 @@ export class FlightWorldScene {
       this.setInitialState(state);
       return;
     }
+    this._applyCenterOfMass(state);
     const sample = this._sampleState(state);
     const last = this.stateBuffer.at(-1);
     const jumped = !last
@@ -456,6 +489,7 @@ export class FlightWorldScene {
       this.stateBuffer = [sample];
       this.currentPosition.copy(sample.position);
       this.currentQuaternion.copy(sample.quaternion);
+      this.renderClockSeconds = sample.serverTime - this.interpolationDelaySeconds;
     } else {
       this.stateBuffer.push(sample);
       if (this.stateBuffer.length > 16) this.stateBuffer.shift();
@@ -559,13 +593,20 @@ export class FlightWorldScene {
   }
 
   _update(dt) {
-    this._processChunkQueue(1);
     if (!this.hasState || this.stateBuffer.length === 0) return;
     const now = performance.now();
     const latest = this.stateBuffer.at(-1);
-    const renderTime = latest.serverTime
+    const targetTime = latest.serverTime
       + (now - latest.receivedAt) / 1000
       - this.interpolationDelaySeconds;
+    if (this.renderClockSeconds == null || Math.abs(targetTime - this.renderClockSeconds) > 0.28) {
+      this.renderClockSeconds = targetTime;
+    } else {
+      this.renderClockSeconds += Math.min(dt, 0.05);
+      const drift = targetTime - this.renderClockSeconds;
+      this.renderClockSeconds += drift * (1 - Math.exp(-Math.min(dt, 0.05) * 2.4));
+    }
+    const renderTime = this.renderClockSeconds;
 
     let before = this.stateBuffer[0];
     let after = before;
@@ -621,6 +662,7 @@ export class FlightWorldScene {
     if (this.cameraMode === 'first') {
       const cockpit = this.model.cockpit;
       const eye = new THREE.Vector3(cockpit.position.x, cockpit.position.y, cockpit.position.z)
+        .sub(this.centerOfMass)
         .applyQuaternion(this.currentQuaternion);
       const cameraPosition = this.currentPosition.clone().add(eye);
       const baseYaw = THREE.MathUtils.degToRad(cockpit.yawDegrees);
@@ -665,6 +707,7 @@ export class FlightWorldScene {
   }
 
   dispose() {
+    this._disposed = true;
     this._events.abort();
     this.viewport.dispose();
   }

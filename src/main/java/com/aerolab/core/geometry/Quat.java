@@ -18,6 +18,10 @@ public record Quat(double x, double y, double z, double w) {
         return new Quat(x / length, y / length, z / length, w / length);
     }
 
+    public Quat conjugate() {
+        return new Quat(-x, -y, -z, w);
+    }
+
     public Quat multiply(Quat other) {
         return new Quat(
                 w * other.x + x * other.w + y * other.z - z * other.y,

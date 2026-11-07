@@ -13,7 +13,9 @@ public record ModelPart(
         Vec3 position,
         Vec3 rotation,
         Vec3 size,
-        String color
+        String color,
+        double massKg,
+        boolean liftingSurface
 ) {
 
     public ModelPart {
@@ -26,6 +28,27 @@ public record ModelPart(
         if (position == null || rotation == null || size == null) {
             throw new IllegalArgumentException("部件变换不能为空");
         }
+        if (!Double.isFinite(massKg) || massKg < 0) {
+            throw new IllegalArgumentException("部件质量必须为非负有限数值");
+        }
+    }
+
+    public ModelPart(
+            String id,
+            String name,
+            ShapeType shape,
+            Vec3 position,
+            Vec3 rotation,
+            Vec3 size,
+            String color
+    ) {
+        this(id, name, shape, position, rotation, size, color, 0, inferLiftingSurface(shape, size));
+    }
+
+    public static boolean inferLiftingSurface(ShapeType shape, Vec3 size) {
+        if (shape != ShapeType.BOX && shape != ShapeType.ELLIPSOID) return false;
+        double span = Math.max(size.x(), size.z());
+        return span >= 0.5 && size.y() <= Math.min(size.x(), size.z()) * 0.35;
     }
 
     public Vec3 toLocal(Vec3 worldPoint) {

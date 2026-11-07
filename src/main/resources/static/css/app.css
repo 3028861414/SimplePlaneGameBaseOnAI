@@ -716,6 +716,42 @@ button:disabled {
   letter-spacing: 0.1em;
 }
 
+.axis-gizmo {
+  position: absolute;
+  left: auto;
+  right: 20px;
+  bottom: 20px;
+  z-index: 7;
+  width: 84px;
+  height: 84px;
+  pointer-events: none;
+  opacity: 0.92;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.35));
+}
+
+.stage[data-mode="simulation"] .axis-gizmo {
+  left: auto;
+  right: 20px;
+  bottom: 20px;
+}
+
+.stage[data-mode="flight"] .axis-gizmo {
+  left: auto;
+  right: 18px;
+  bottom: 320px;
+}
+
+@media (max-width: 1000px) {
+  .axis-gizmo {
+    width: 70px;
+    height: 70px;
+  }
+
+  .stage[data-mode="flight"] .axis-gizmo {
+    bottom: 285px;
+  }
+}
+
 /* Shared floating panels */
 .floating-panel {
   pointer-events: auto;
@@ -3466,7 +3502,7 @@ input[type="color"]::-webkit-color-swatch {
   font-size: 8px;
 }
 
-.flight-key-grid > div:nth-child(11) {
+.flight-key-grid > div:nth-child(13) {
   grid-column: span 2;
 }
 

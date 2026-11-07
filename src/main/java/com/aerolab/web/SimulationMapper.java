@@ -54,7 +54,11 @@ public final class SimulationMapper {
                 toDomain(dto.position(), name + " 的位置"),
                 toDomain(dto.rotation(), name + " 的旋转角"),
                 toDomain(dto.size(), name + " 的尺寸"),
-                dto.color()
+                dto.color(),
+                dto.massKg() == null ? 0 : dto.massKg(),
+                dto.liftingSurface() != null
+                        ? dto.liftingSurface()
+                        : ModelPart.inferLiftingSurface(dto.shape(), toDomain(dto.size(), name + " 的尺寸"))
         );
     }
 
