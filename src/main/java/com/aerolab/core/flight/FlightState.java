@@ -1,0 +1,27 @@
+package com.aerolab.core.flight;
+
+import com.aerolab.core.geometry.Quat;
+import com.aerolab.core.geometry.Vec3;
+
+public record FlightState(
+        double timeSeconds,
+        Vec3 position,
+        Vec3 velocity,
+        Quat orientation,
+        double speedMps,
+        double verticalSpeedMps,
+        double altitudeMslM,
+        double altitudeAglM,
+        double headingDeg,
+        double pitchDeg,
+        double rollDeg,
+        double throttle,
+        double engineThrustN,
+        double gLoad,
+        boolean onGround,
+        boolean crashed,
+        boolean stalled,
+        boolean outsideWorld,
+        String crashReason
+) {
+}

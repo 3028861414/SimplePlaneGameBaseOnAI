@@ -1,6 +1,7 @@
 import { ModelStore } from './core/model.js';
 import { ModelEditor } from './modeling/model-editor.js';
 import { SimulationView } from './simulation/simulation-view.js';
+import { FlightView } from './flight/flight-view.js';
 
 class AerolabApp {
   constructor() {
@@ -28,7 +29,7 @@ class AerolabApp {
   }
 
   activate(name) {
-    if (!['modeling', 'simulation'].includes(name)) return;
+    if (!['modeling', 'simulation', 'flight'].includes(name)) return;
     if (this.activeView === name && this.view) return;
 
     this.view?.dispose?.();
@@ -53,9 +54,10 @@ class AerolabApp {
         overlay: this.overlayHost,
         headerActions: this.headerActions,
         store: this.store,
-        onSimulation: () => this.activate('simulation')
+        onSimulation: () => this.activate('simulation'),
+        onFlight: () => this.activate('flight')
       });
-    } else {
+    } else if (name === 'simulation') {
       this.headerKicker.textContent = 'Wind Tunnel Analysis';
       this.headerTitle.textContent = '气动模拟';
       this.view = new SimulationView({
@@ -64,6 +66,16 @@ class AerolabApp {
         headerActions: this.headerActions,
         store: this.store,
         onBack: () => this.activate('modeling')
+      });
+    } else {
+      this.headerKicker.textContent = 'Procedural Flight World';
+      this.headerTitle.textContent = '虚拟驾驶';
+      this.view = new FlightView({
+        container: this.viewportHost,
+        overlay: this.overlayHost,
+        headerActions: this.headerActions,
+        store: this.store,
+        onExit: () => this.activate('modeling')
       });
     }
 

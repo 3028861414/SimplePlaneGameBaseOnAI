@@ -17,7 +17,7 @@ class SimplifiedAerodynamicSimulatorTest {
     @Test
     void producesSurfaceAndFlowFieldsForAircraft() {
         VehicleModel model = TestModels.aircraft();
-        FlowConditions conditions = new FlowConditions(38, 0, 1.225);
+        FlowConditions conditions = new FlowConditions(new com.aerolab.core.geometry.Vec3(-1, 0, 0), 38, 1.225);
 
         SimulationResult result = simulator.simulate(model, conditions);
 
@@ -60,8 +60,8 @@ class SimplifiedAerodynamicSimulatorTest {
     @Test
     void scalesFlowAndLoadsWithWindSpeed() {
         VehicleModel model = TestModels.aircraft();
-        SimulationResult slow = simulator.simulate(model, new FlowConditions(20, 0, 1.225));
-        SimulationResult fast = simulator.simulate(model, new FlowConditions(40, 0, 1.225));
+        SimulationResult slow = simulator.simulate(model, new FlowConditions(new com.aerolab.core.geometry.Vec3(-1, 0, 0), 20, 1.225));
+        SimulationResult fast = simulator.simulate(model, new FlowConditions(new com.aerolab.core.geometry.Vec3(-1, 0, 0), 40, 1.225));
 
         assertTrue(fast.summary().maxFlowSpeedMps() > slow.summary().maxFlowSpeedMps());
         assertTrue(Math.abs(fast.summary().dragN()) > Math.abs(slow.summary().dragN()));
@@ -72,7 +72,7 @@ class SimplifiedAerodynamicSimulatorTest {
     @Test
     void sideWindChangesFlowDirection() {
         VehicleModel model = TestModels.aircraft();
-        SimulationResult result = simulator.simulate(model, new FlowConditions(30, 90, 1.225));
+        SimulationResult result = simulator.simulate(model, new FlowConditions(new com.aerolab.core.geometry.Vec3(0, 0, -1), 30, 1.225));
         double[] direction = {result.windDirection().x(), result.windDirection().y(), result.windDirection().z()};
         assertEquals(0, direction[0], 1e-9);
         assertEquals(-1, direction[2], 1e-9);

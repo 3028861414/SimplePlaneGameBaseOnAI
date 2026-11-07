@@ -7,7 +7,44 @@ export const SHAPE_INFO = Object.freeze({
 
 export const PART_COLORS = ['#c9d7df', '#35c6b1', '#3f8fbf', '#e6a15c', '#b8c5d0', '#e06d5c', '#8c9dd6', '#6dcab3'];
 
+export const FLIGHT_SYSTEM_META = Object.freeze({
+  engines: { label: '引擎', plural: '引擎', color: '#58e0c7', prefix: 'engine' },
+  horizontalRudders: { label: '水平舵', plural: '水平舵', color: '#80d96b', prefix: 'elevator' },
+  verticalRudders: { label: '垂直舵', plural: '垂直舵', color: '#69b7ef', prefix: 'rudder' },
+  guns: { label: '机炮', plural: '机炮', color: '#ffb166', prefix: 'gun' }
+});
+
+export const BINDING_DEFINITIONS = Object.freeze([
+  { action: 'throttleUp', label: '增加油门', group: '动力' },
+  { action: 'throttleDown', label: '减小油门', group: '动力' },
+  { action: 'boost', label: '加力推进', group: '动力' },
+  { action: 'pitchUp', label: '抬头 / 爬升', group: '姿态' },
+  { action: 'pitchDown', label: '低头 / 俯冲', group: '姿态' },
+  { action: 'yawLeft', label: '向左偏航', group: '姿态' },
+  { action: 'yawRight', label: '向右偏航', group: '姿态' },
+  { action: 'brake', label: '刹车 / 减速', group: '辅助' },
+  { action: 'toggleCamera', label: '切换视角', group: '驾驶' },
+  { action: 'resetFlight', label: '重新起飞', group: '驾驶' },
+  { action: 'fireGuns', label: '机炮按键（暂不作用）', group: '驾驶' }
+]);
+
+export const DEFAULT_BINDINGS = Object.freeze({
+  throttleUp: 'KeyW',
+  throttleDown: 'KeyS',
+  pitchUp: 'ArrowUp',
+  pitchDown: 'ArrowDown',
+  yawLeft: 'ArrowLeft',
+  yawRight: 'ArrowRight',
+  boost: 'ShiftLeft',
+  brake: 'KeyB',
+  toggleCamera: 'KeyC',
+  resetFlight: 'KeyR',
+  fireGuns: 'Space'
+});
+
 const STORAGE_KEY = 'aerolab.model.v1';
+const SHAPES = new Set(Object.keys(SHAPE_INFO));
+const COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
 
 export function uid(prefix = 'part') {
   if (globalThis.crypto?.randomUUID) {
@@ -40,6 +77,31 @@ export function createPart(shape, overrides = {}) {
   };
 }
 
+export function createDefaultFlightSystems() {
+  return {
+    massKg: 1350,
+    engines: [
+      { id: 'sys-engine-left', name: '左引擎', position: vec3(0.35, -0.44, -1.85), maxThrustN: 4200 },
+      { id: 'sys-engine-right', name: '右引擎', position: vec3(0.35, -0.44, 1.85), maxThrustN: 4200 }
+    ],
+    horizontalRudders: [
+      { id: 'sys-elevator-left', name: '左升降舵', position: vec3(-2.55, 0.13, -0.9) },
+      { id: 'sys-elevator-right', name: '右升降舵', position: vec3(-2.55, 0.13, 0.9) }
+    ],
+    verticalRudders: [
+      { id: 'sys-rudder-main', name: '方向舵', position: vec3(-2.45, 0.65, 0) }
+    ],
+    guns: [
+      { id: 'sys-gun-left', name: '左机炮', position: vec3(3.05, 0, -0.18) },
+      { id: 'sys-gun-right', name: '右机炮', position: vec3(3.05, 0, 0.18) }
+    ]
+  };
+}
+
+export function createDefaultBindings() {
+  return { ...DEFAULT_BINDINGS };
+}
+
 export function createDemoAircraft() {
   const parts = [
     {
@@ -68,12 +130,12 @@ export function createDemoAircraft() {
       color: '#35c6b1'
     },
     {
-      id: 'engine-left', name: '左引擎', shape: 'CYLINDER',
+      id: 'engine-left', name: '左引擎短舱', shape: 'CYLINDER',
       position: vec3(0.35, -0.44, -1.85), rotation: vec3(0, 0, -90), size: vec3(0.5, 1.75, 0.5),
       color: '#405462'
     },
     {
-      id: 'engine-right', name: '右引擎', shape: 'CYLINDER',
+      id: 'engine-right', name: '右引擎短舱', shape: 'CYLINDER',
       position: vec3(0.35, -0.44, 1.85), rotation: vec3(0, 0, -90), size: vec3(0.5, 1.75, 0.5),
       color: '#405462'
     },
@@ -95,14 +157,16 @@ export function createDemoAircraft() {
   ];
 
   return {
-    version: 1,
+    version: 2,
     name: 'AEROLAB X-01',
     parts,
     cockpit: {
       position: vec3(1.22, 0.72, 0),
       yawDegrees: 0,
       pitchDegrees: -4
-    }
+    },
+    flightSystems: createDefaultFlightSystems(),
+    bindings: createDefaultBindings()
   };
 }
 
@@ -116,6 +180,75 @@ export function modelStats(model) {
     length: Math.max(...xs) - Math.min(...xs),
     span: Math.max(...zs) - Math.min(...zs)
   };
+}
+
+export function normalizeAircraft(raw) {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('模型文件内容为空或格式无效。');
+  }
+  const source = raw.aircraft && typeof raw.aircraft === 'object' ? raw.aircraft : raw;
+  const parts = normalizeParts(source.parts);
+  const cockpitSource = source.cockpit ?? {};
+  const cockpit = {
+    position: normalizeVector(cockpitSource.position, vec3(1.22, 0.72, 0), -2000, 2000),
+    yawDegrees: clampNumber(cockpitSource.yawDegrees, -360, 360, 0),
+    pitchDegrees: clampNumber(cockpitSource.pitchDegrees, -89, 89, -4)
+  };
+  return {
+    version: 2,
+    name: normalizeText(source.name, '未命名飞行器', 80),
+    parts,
+    cockpit,
+    flightSystems: normalizeFlightSystems(source.flightSystems),
+    bindings: normalizeBindings(source.bindings)
+  };
+}
+
+export function buildAircraftExport(model) {
+  const normalized = normalizeAircraft(model);
+  return JSON.stringify({
+    format: 'aerolab-aircraft',
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    ...normalized
+  }, null, 2);
+}
+
+export function parseAircraftFile(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('JSON 文件无法解析。');
+  }
+  if (parsed?.format && parsed.format !== 'aerolab-aircraft') {
+    throw new Error('不是有效的 AEROLAB 飞机文件。');
+  }
+  const normalized = normalizeAircraft(parsed);
+  if (normalized.parts.length === 0) {
+    throw new Error('飞机文件至少需要一个几何部件。');
+  }
+  return normalized;
+}
+
+export function safeAircraftFileName(model) {
+  const base = (model?.name || 'aerolab-aircraft').trim().replace(/[\\/:*?"<>|]+/g, '-');
+  return `${base || 'aerolab-aircraft'}.aerolab.json`;
+}
+
+export function formatKeyCode(code) {
+  if (!code) return '未绑定';
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  const map = {
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+    Space: 'SPACE', ShiftLeft: 'L-SHIFT', ShiftRight: 'R-SHIFT',
+    ControlLeft: 'L-CTRL', ControlRight: 'R-CTRL', AltLeft: 'L-ALT', AltRight: 'R-ALT',
+    Backquote: '`', Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']',
+    Backslash: '\\', Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/',
+    Enter: 'ENTER', Tab: 'TAB', Escape: 'ESC'
+  };
+  return map[code] ?? code.replace(/^Numpad/, 'NUM ');
 }
 
 export class ModelStore {
@@ -178,13 +311,113 @@ export class ModelStore {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!parsed || !Array.isArray(parsed.parts) || parsed.parts.length === 0) return null;
-      if (!parsed.cockpit?.position) return null;
-      return parsed;
+      return normalizeAircraft(JSON.parse(raw));
     } catch (error) {
       console.warn('Unable to load persisted model', error);
       return null;
     }
   }
+}
+
+function normalizeParts(rawParts) {
+  if (!Array.isArray(rawParts)) return [];
+  const seen = new Set();
+  const parts = [];
+  for (const raw of rawParts.slice(0, 80)) {
+    if (!raw || !SHAPES.has(raw.shape)) continue;
+    let id = normalizeText(raw.id, uid('part'), 80);
+    if (seen.has(id)) id = uid('part');
+    seen.add(id);
+    parts.push({
+      id,
+      name: normalizeText(raw.name, SHAPE_INFO[raw.shape].defaultName, 60),
+      shape: raw.shape,
+      position: normalizeVector(raw.position, vec3(0, 0, 0), -2000, 2000),
+      rotation: normalizeVector(raw.rotation, SHAPE_INFO[raw.shape].rotation, -1080, 1080),
+      size: normalizeVector(raw.size, SHAPE_INFO[raw.shape].size, 0.02, 100),
+      color: COLOR_PATTERN.test(raw.color ?? '') ? raw.color : PART_COLORS[0]
+    });
+  }
+  return parts;
+}
+
+function normalizeFlightSystems(raw) {
+  if (!raw || typeof raw !== 'object') return createDefaultFlightSystems();
+  return {
+    massKg: clampNumber(raw.massKg, 100, 100000, 1350),
+    engines: normalizeEngineList(raw.engines),
+    horizontalRudders: normalizeSurfaceList(raw.horizontalRudders, 'elevator'),
+    verticalRudders: normalizeSurfaceList(raw.verticalRudders, 'rudder'),
+    guns: normalizeGunList(raw.guns)
+  };
+}
+
+function normalizeEngineList(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  return raw.slice(0, 12).map((item, index) => ({
+    id: uniqueSystemId(item?.id, 'engine', index, seen),
+    name: normalizeText(item?.name, `引擎 ${index + 1}`, 60),
+    position: normalizeVector(item?.position, vec3(0, 0, 0), -2000, 2000),
+    maxThrustN: clampNumber(item?.maxThrustN, 0, 200000, 4200)
+  }));
+}
+
+function normalizeSurfaceList(raw, prefix) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  return raw.slice(0, 12).map((item, index) => ({
+    id: uniqueSystemId(item?.id, prefix, index, seen),
+    name: normalizeText(item?.name, prefix === 'elevator' ? `水平舵 ${index + 1}` : `垂直舵 ${index + 1}`, 60),
+    position: normalizeVector(item?.position, vec3(0, 0, 0), -2000, 2000)
+  }));
+}
+
+function normalizeGunList(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  return raw.slice(0, 16).map((item, index) => ({
+    id: uniqueSystemId(item?.id, 'gun', index, seen),
+    name: normalizeText(item?.name, `机炮 ${index + 1}`, 60),
+    position: normalizeVector(item?.position, vec3(0, 0, 0), -2000, 2000)
+  }));
+}
+
+function uniqueSystemId(rawId, prefix, index, seen) {
+  let id = normalizeText(rawId, `${prefix}-${index + 1}`, 80);
+  if (seen.has(id)) id = uid(prefix);
+  seen.add(id);
+  return id;
+}
+
+function normalizeBindings(raw) {
+  const bindings = createDefaultBindings();
+  if (raw && typeof raw === 'object') {
+    for (const { action } of BINDING_DEFINITIONS) {
+      const code = raw[action];
+      if (typeof code === 'string' && code.trim() && code.trim().length <= 40) {
+        bindings[action] = code.trim();
+      }
+    }
+  }
+  return bindings;
+}
+
+function normalizeVector(raw, fallback, min, max) {
+  return {
+    x: clampNumber(raw?.x, min, max, fallback?.x ?? 0),
+    y: clampNumber(raw?.y, min, max, fallback?.y ?? 0),
+    z: clampNumber(raw?.z, min, max, fallback?.z ?? 0)
+  };
+}
+
+function normalizeText(value, fallback, maxLength) {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim();
+  return (trimmed || fallback).slice(0, maxLength);
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : fallback;
 }

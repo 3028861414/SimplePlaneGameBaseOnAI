@@ -65,18 +65,18 @@ function applySurfaceColors(geometry, surface, metric, speedMax) {
 export function createStreamlines(field, speedMax) {
   const lines = [];
   const colors = [];
-  const yCount = 5;
-  const zCount = 9;
+  const yCount = 7;
+  const zCount = 13;
   const size = field.bounds.getSize(new THREE.Vector3());
-  const step = Math.max(field.minCell * 0.85, size.length() / 700);
-  const maxSteps = 240;
+  const step = Math.max(field.minCell * 0.82, size.length() / 760);
+  const maxSteps = 280;
 
   for (let yIndex = 0; yIndex < yCount; yIndex++) {
-    const fy = (yIndex + 0.7) / (yCount + 0.4);
-    const j = 0.06 * (field.ny - 1) + fy * 0.88 * (field.ny - 1);
+    const fy = (yIndex + 0.5) / yCount;
+    const j = 0.12 * (field.ny - 1) + fy * 0.76 * (field.ny - 1);
     for (let zIndex = 0; zIndex < zCount; zIndex++) {
       const fz = (zIndex + 0.5) / zCount;
-      const k = 0.035 * (field.nz - 1) + fz * 0.93 * (field.nz - 1);
+      const k = 0.08 * (field.nz - 1) + fz * 0.84 * (field.nz - 1);
       const start = field.positionAt(1.2, j, k);
       if (field.sample(start)) {
         traceLine(field, start, step, maxSteps, speedMax, lines, colors);
@@ -90,9 +90,9 @@ export function createStreamlines(field, speedMax) {
   const material = new THREE.LineBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.58,
+    opacity: 0.5,
     depthWrite: false,
-    blending: THREE.NormalBlending
+    blending: THREE.AdditiveBlending
   });
   const object = new THREE.LineSegments(geometry, material);
   object.name = 'speed-streamlines';
@@ -135,22 +135,26 @@ function traceLine(field, start, step, maxSteps, speedMax, lines, colors) {
 }
 
 export class FlowParticles {
-  constructor(field, speedMax, count = 620) {
+  constructor(field, speedMax, count = 860) {
     this.field = field;
     this.speedMax = speedMax;
     this.count = count;
     this.positions = new Float32Array(count * 3);
     this.colors = new Float32Array(count * 3);
     this.speeds = new Float32Array(count);
+    this.texture = createPointTexture();
     this.geometry = new THREE.BufferGeometry();
     this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
     this.geometry.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
     this.material = new THREE.PointsMaterial({
-      size: Math.max(field.minCell * 0.17, 0.045),
+      size: Math.max(field.minCell * 0.2, 0.05),
+      map: this.texture,
       vertexColors: true,
       transparent: true,
-      opacity: 0.6,
+      opacity: 0.68,
+      alphaTest: 0.01,
       depthWrite: false,
+      blending: THREE.AdditiveBlending,
       sizeAttenuation: true
     });
     this.points = new THREE.Points(this.geometry, this.material);
@@ -169,7 +173,7 @@ export class FlowParticles {
 
   update(delta) {
     const field = this.field;
-    const visualScale = 0.12;
+    const visualScale = 0.16;
     for (let i = 0; i < this.count; i++) {
       const base = i * 3;
       const position = new THREE.Vector3(
@@ -211,11 +215,83 @@ export class FlowParticles {
   dispose() {
     this.geometry.dispose();
     this.material.dispose();
+    this.texture.dispose();
   }
+}
+
+export function createFlowVolume(field, speedMax) {
+  const positions = [];
+  const colors = [];
+  const { nx, ny, nz } = field;
+  const strideX = 2;
+  const strideY = 3;
+  const strideZ = 3;
+  const color = new THREE.Color();
+
+  for (let k = 1; k < nz - 1; k += strideZ) {
+    for (let j = 1; j < ny - 1; j += strideY) {
+      const yFraction = j / (ny - 1);
+      if (yFraction < 0.16 || yFraction > 0.84) continue;
+      for (let i = 1; i < nx - 1; i += strideX) {
+        const xFraction = i / (nx - 1);
+        if (xFraction < 0.08 || xFraction > 0.9) continue;
+        const index = i + nx * (j + ny * k);
+        const speed = field.speed[index];
+        if (!Number.isFinite(speed) || speed <= 0) continue;
+        const position = field.positionAt(i, j, k);
+        positions.push(position.x, position.y, position.z);
+        const rgb = speedColor(THREE.MathUtils.clamp(speed / Math.max(speedMax, 1e-6), 0, 1));
+        color.setRGB(srgbToLinear(rgb[0]), srgbToLinear(rgb[1]), srgbToLinear(rgb[2]));
+        colors.push(color.r, color.g, color.b);
+      }
+    }
+  }
+
+  const texture = createPointTexture(0.32);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  const material = new THREE.PointsMaterial({
+    size: Math.max(field.minCell * 0.12, 0.035),
+    map: texture,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.16,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    sizeAttenuation: true
+  });
+  const points = new THREE.Points(geometry, material);
+  points.name = 'flow-volume';
+  points.renderOrder = 3;
+  points.frustumCulled = false;
+  points.userData.disposeTexture = texture;
+  return points;
+}
+
+function createPointTexture(centerAlpha = 1) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const context = canvas.getContext('2d');
+  const gradient = context.createRadialGradient(32, 32, 0, 32, 32, 31);
+  gradient.addColorStop(0, `rgba(255,255,255,${centerAlpha})`);
+  gradient.addColorStop(0.22, `rgba(255,255,255,${0.72 * centerAlpha})`);
+  gradient.addColorStop(0.55, `rgba(255,255,255,${0.2 * centerAlpha})`);
+  gradient.addColorStop(1, 'rgba(255,255,255,0)');
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 64, 64);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  return texture;
 }
 
 export function createWindCage(field) {
   const { nx, ny, nz } = field;
+  const group = new THREE.Group();
+  group.name = 'wind-tunnel-cage';
   const corners = [
     field.positionAt(0, 0, 0), field.positionAt(nx - 1, 0, 0),
     field.positionAt(nx - 1, ny - 1, 0), field.positionAt(0, ny - 1, 0),
@@ -236,11 +312,64 @@ export function createWindCage(field) {
   const material = new THREE.LineBasicMaterial({
     color: 0x3a8290,
     transparent: true,
-    opacity: 0.32,
+    opacity: 0.26,
     depthWrite: false
   });
   const lines = new THREE.LineSegments(geometry, material);
-  lines.name = 'wind-tunnel-cage';
   lines.renderOrder = 1;
-  return lines;
+  group.add(lines);
+
+  const inlet = field.positionAt(1.5, 0, 0);
+  const u = field.axisY;
+  const v = field.axisZ;
+  const width = field.stepLengths[1] * (ny - 1);
+  const depth = field.stepLengths[2] * (nz - 1);
+  const inletGeometry = new THREE.BufferGeometry().setFromPoints([
+    inlet,
+    inlet.clone().addScaledVector(u, width),
+    inlet.clone().addScaledVector(u, width).addScaledVector(v, depth),
+    inlet.clone().addScaledVector(v, depth)
+  ]);
+  inletGeometry.setIndex([0, 1, 2, 0, 2, 3]);
+  const inletMesh = new THREE.Mesh(
+    inletGeometry,
+    new THREE.MeshBasicMaterial({
+      color: 0x71d8d2,
+      transparent: true,
+      opacity: 0.035,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    })
+  );
+  inletMesh.renderOrder = 1;
+  group.add(inletMesh);
+
+  const arrowLength = Math.max(field.stepLengths[0] * 3.5, 0.8);
+  for (const yf of [0.22, 0.5, 0.78]) {
+    for (const zf of [0.18, 0.5, 0.82]) {
+      const origin = field.positionAt(
+        1.5,
+        Math.round(yf * (ny - 1)),
+        Math.round(zf * (nz - 1))
+      );
+      const arrow = new THREE.ArrowHelper(
+        field.axisX,
+        origin,
+        arrowLength,
+        0x6ce4d7,
+        arrowLength * 0.24,
+        arrowLength * 0.13
+      );
+      arrow.line.material.transparent = true;
+      arrow.line.material.opacity = 0.34;
+      arrow.line.material.depthWrite = false;
+      arrow.cone.material.transparent = true;
+      arrow.cone.material.opacity = 0.42;
+      arrow.cone.material.depthWrite = false;
+      arrow.renderOrder = 2;
+      group.add(arrow);
+    }
+  }
+
+  return group;
 }

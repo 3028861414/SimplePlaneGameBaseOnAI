@@ -12,7 +12,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
 class SimulationApiTest {
 
@@ -59,8 +59,8 @@ class SimulationApiTest {
                     }
                   },
                   "conditions": {
+                    "direction": {"x": -1, "y": 0, "z": 0},
                     "windSpeedMps": 35,
-                    "windFromAzimuthDeg": 0,
                     "airDensity": 1.225
                   }
                 }
@@ -94,8 +94,8 @@ class SimulationApiTest {
                     }
                   },
                   "conditions": {
+                    "direction": {"x": -1, "y": 0, "z": 0},
                     "windSpeedMps": 30,
-                    "windFromAzimuthDeg": 0,
                     "airDensity": 1.225
                   }
                 }

@@ -9,6 +9,7 @@ import { SectionPlane } from './section-plane.js';
 import {
   FlowParticles,
   buildSurfaceMeshes,
+  createFlowVolume,
   createStreamlines,
   createWindCage
 } from './flow-visuals.js';
@@ -16,12 +17,12 @@ import {
 const SETTINGS_KEY = 'aerolab.sim-settings.v1';
 const DEFAULT_SETTINGS = {
   windSpeedMps: 38,
-  windFromAzimuthDeg: 0,
+  windDirection: { x: -1, y: 0, z: 0 },
   airDensity: 1.225,
   metric: 'pressure',
   sectionAxis: 'Z',
   sectionEnabled: true,
-  display: { streamlines: true, particles: true, cage: true }
+  display: { streamlines: true, particles: true, volume: true, cage: true }
 };
 
 export class SimulationView {
@@ -64,7 +65,11 @@ export class SimulationView {
       if (this.particles && this.display.particles) this.particles.update(delta);
     });
 
-    requestAnimationFrame(() => this.runSimulation({ initial: true }));
+    setTimeout(() => {
+      if (!this._disposed && !this._hasResult && !this._requestController) {
+        this.runSimulation({ initial: true });
+      }
+    }, 0);
   }
 
   _renderOverlay() {
@@ -76,7 +81,7 @@ export class SimulationView {
               <div class="panel-kicker">Freestream</div>
               <h2>来流条件</h2>
             </div>
-            <span class="live-chip"><i></i>水平风洞</span>
+            <span class="live-chip"><i></i>3D 风洞</span>
           </div>
 
           <div class="sim-field">
@@ -84,19 +89,42 @@ export class SimulationView {
               <label for="wind-speed">风速</label>
               <output data-readout="windSpeed">${formatNumber(this.settings.windSpeedMps, 1)} m/s</output>
             </div>
-            <input id="wind-speed" class="range-input" type="range" min="5" max="90" step="1"
+            <input id="wind-speed" class="range-input" type="range" min="1" max="120" step="1"
                    value="${this.settings.windSpeedMps}" data-control="windSpeed">
-            <div class="sim-field__ticks"><span>5</span><span>90 m/s</span></div>
+            <div class="sim-field__ticks"><span>1</span><span>120 m/s</span></div>
           </div>
 
-          <div class="sim-field">
+          <div class="sim-field sim-field--vector">
             <div class="sim-field__head">
-              <label for="wind-direction">来流方位</label>
-              <output data-readout="windDirection">${directionLabel(this.settings.windFromAzimuthDeg)}</output>
+              <span class="sim-field-label">来流方向向量</span>
+              <output data-readout="windDirection">${directionLabel(this.settings.windDirection)}</output>
             </div>
-            <input id="wind-direction" class="range-input" type="range" min="0" max="355" step="5"
-                   value="${this.settings.windFromAzimuthDeg}" data-control="windDirection">
-            <div class="sim-field__ticks"><span>0° 机头</span><span>90° 右舷</span><span>180° 尾部</span></div>
+            <div class="wind-vector-grid">
+              <label title="沿机体纵轴：负值来自机头，正值来自尾部">
+                <span>X</span>
+                <input type="number" inputmode="decimal" step="0.05" value="${formatNumber(this.settings.windDirection.x, 2)}"
+                       data-control="windX" aria-label="来流方向 X 分量">
+              </label>
+              <label title="垂直方向：负值自上而下，正值自下而上">
+                <span>Y</span>
+                <input type="number" inputmode="decimal" step="0.05" value="${formatNumber(this.settings.windDirection.y, 2)}"
+                       data-control="windY" aria-label="来流方向 Y 分量">
+              </label>
+              <label title="横向：负值从右舷吹向左舷，正值反之">
+                <span>Z</span>
+                <input type="number" inputmode="decimal" step="0.05" value="${formatNumber(this.settings.windDirection.z, 2)}"
+                       data-control="windZ" aria-label="来流方向 Z 分量">
+              </label>
+            </div>
+            <div class="wind-presets" aria-label="方向预设">
+              <button type="button" data-wind-preset="-1,0,0">机头来流</button>
+              <button type="button" data-wind-preset="0,0,-1">右舷来流</button>
+              <button type="button" data-wind-preset="0,0,1">左舷来流</button>
+              <button type="button" data-wind-preset="1,0,0">尾部来流</button>
+              <button type="button" data-wind-preset="0,-1,0">顶部来流</button>
+              <button type="button" data-wind-preset="-0.7,-0.25,-0.65">斜向复合</button>
+            </div>
+            <p class="wind-vector-note">输入空气流动方向，求解器自动归一化；向量不可为零。</p>
           </div>
 
           <div class="sim-field sim-field--compact">
@@ -130,13 +158,17 @@ export class SimulationView {
                     data-display-toggle="particles" aria-pressed="${this.display.particles}">
               <i class="chip-dot"></i>粒子
             </button>
+            <button class="display-chip ${this.display.volume ? 'is-active' : ''}" type="button"
+                    data-display-toggle="volume" aria-pressed="${this.display.volume}">
+              <i class="chip-volume"></i>场雾
+            </button>
             <button class="display-chip ${this.display.cage ? 'is-active' : ''}" type="button"
                     data-display-toggle="cage" aria-pressed="${this.display.cage}">
               <i class="chip-cage"></i>边界
             </button>
           </div>
 
-          <p class="sim-hint">调整来流后，使用右上角“重新求解”刷新流场。</p>
+          <p class="sim-hint">方向向量支持任意三维来流；调整条件后使用右上角“重新求解”。</p>
         </aside>
 
         <aside class="floating-panel sim-panel sim-section-panel">
@@ -317,6 +349,16 @@ export class SimulationView {
         this.setSectionAxis(axis);
         return;
       }
+      const preset = event.target.closest('[data-wind-preset]')?.dataset.windPreset;
+      if (preset) {
+        const [x, y, z] = preset.split(',').map(Number);
+        this.settings.windDirection = { x, y, z };
+        this._syncWindDirectionInputs();
+        this.dirty = true;
+        this._updateControlReadouts();
+        this._markDirty();
+        return;
+      }
       const toggle = event.target.closest('[data-display-toggle]')?.dataset.displayToggle;
       if (toggle) {
         this.display[toggle] = !this.display[toggle];
@@ -338,7 +380,9 @@ export class SimulationView {
         const value = Number(event.target.value);
         if (!Number.isFinite(value)) return;
         if (control === 'windSpeed') this.settings.windSpeedMps = value;
-        if (control === 'windDirection') this.settings.windFromAzimuthDeg = value;
+        if (control === 'windX') this.settings.windDirection.x = clampNumber(value, -10, 10, 0);
+        if (control === 'windY') this.settings.windDirection.y = clampNumber(value, -10, 10, 0);
+        if (control === 'windZ') this.settings.windDirection.z = clampNumber(value, -10, 10, 0);
         if (control === 'airDensity') this.settings.airDensity = value;
         this.dirty = true;
         this._updateControlReadouts();
@@ -411,7 +455,8 @@ export class SimulationView {
     const densityOutput = this.overlayHost.querySelector('[data-readout="airDensity"]');
     if (!windOutput) return;
     windOutput.textContent = `${formatNumber(this.settings.windSpeedMps, 1)} m/s`;
-    directionOutput.textContent = directionLabel(this.settings.windFromAzimuthDeg);
+    directionOutput.textContent = directionLabel(this.settings.windDirection);
+    directionOutput.dataset.state = isNonZeroVector(this.settings.windDirection) ? 'valid' : 'error';
     densityOutput.textContent = `${formatNumber(this.settings.airDensity, 3)} kg/m³`;
     this.overlayHost.querySelectorAll('.range-input[data-control]').forEach(input => {
       const min = Number(input.min);
@@ -420,6 +465,13 @@ export class SimulationView {
       const progress = ((value - min) / Math.max(max - min, 1e-6)) * 100;
       input.style.setProperty('--range-progress', `${progress}%`);
     });
+  }
+
+  _syncWindDirectionInputs() {
+    for (const [axis, control] of [['x', 'windX'], ['y', 'windY'], ['z', 'windZ']]) {
+      const input = this.overlayHost.querySelector(`[data-control="${control}"]`);
+      if (input) input.value = formatNumber(this.settings.windDirection[axis], 2);
+    }
   }
 
   _markDirty() {
@@ -438,6 +490,12 @@ export class SimulationView {
       this._setRunDisabled(true);
       return;
     }
+    if (!isNonZeroVector(this.settings.windDirection)) {
+      this._showError('来流方向无效', '方向向量的 X、Y、Z 分量不能同时为零。请指定空气流动方向后重新求解。');
+      this._setStatus('来流方向无效', 'error');
+      this._updateControlReadouts();
+      return;
+    }
     this._exitCockpit();
     this._requestController?.abort();
     const controller = new AbortController();
@@ -448,8 +506,8 @@ export class SimulationView {
     this._setStatus('求解中 · 势流 / 尾迹模型', 'running');
     this.ui.runLabel.textContent = '求解中…';
     const runSettings = {
+      direction: { ...this.settings.windDirection },
       windSpeedMps: this.settings.windSpeedMps,
-      windFromAzimuthDeg: this.settings.windFromAzimuthDeg,
       airDensity: this.settings.airDensity
     };
 
@@ -464,7 +522,7 @@ export class SimulationView {
       this._hideBusy();
       this.ui.runLabel.textContent = '重新求解';
       const conditionsChanged = this.settings.windSpeedMps !== runSettings.windSpeedMps
-        || this.settings.windFromAzimuthDeg !== runSettings.windFromAzimuthDeg
+        || !sameDirection(this.settings.windDirection, runSettings.direction)
         || this.settings.airDensity !== runSettings.airDensity;
       if (conditionsChanged) {
         this.dirty = true;
@@ -515,8 +573,11 @@ export class SimulationView {
     this.streamlines = createStreamlines(field, this.speedMax);
     this.dynamicRoot.add(this.streamlines);
 
-    this.particles = new FlowParticles(field, this.speedMax, 620);
+    this.particles = new FlowParticles(field, this.speedMax, 900);
     this.dynamicRoot.add(this.particles.points);
+
+    this.volume = createFlowVolume(field, this.speedMax);
+    this.dynamicRoot.add(this.volume);
 
     this.cage = createWindCage(field);
     this.dynamicRoot.add(this.cage);
@@ -700,6 +761,7 @@ export class SimulationView {
     if (!this.dynamicRoot) return;
     if (this.streamlines) this.streamlines.visible = this.display.streamlines;
     if (this.particles) this.particles.points.visible = this.display.particles;
+    if (this.volume) this.volume.visible = this.display.volume;
     if (this.cage) this.cage.visible = this.display.cage;
     if (this.sectionPlane) {
       this.sectionPlane.setVisible(this.sectionEnabled && !this.cockpitActive);
@@ -834,7 +896,7 @@ export class SimulationView {
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify({
         windSpeedMps: this.settings.windSpeedMps,
-        windFromAzimuthDeg: this.settings.windFromAzimuthDeg,
+        direction: { ...this.settings.windDirection },
         airDensity: this.settings.airDensity,
         metric: this.metric,
         sectionAxis: this.sectionAxis,
@@ -868,14 +930,31 @@ function loadSettings() {
   } catch {
     stored = {};
   }
-  const windSpeedMps = clampNumber(stored.windSpeedMps, 5, 90, DEFAULT_SETTINGS.windSpeedMps);
-  const windFromAzimuthDeg = clampNumber(stored.windFromAzimuthDeg, 0, 355, DEFAULT_SETTINGS.windFromAzimuthDeg);
+  const windSpeedMps = clampNumber(stored.windSpeedMps, 1, 120, DEFAULT_SETTINGS.windSpeedMps);
+  let windDirection = stored.direction;
+  if (!windDirection || !Number.isFinite(Number(windDirection.x))
+      || !Number.isFinite(Number(windDirection.y)) || !Number.isFinite(Number(windDirection.z))) {
+    const legacyAzimuth = Number(stored.windFromAzimuthDeg);
+    if (Number.isFinite(legacyAzimuth)) {
+      const radians = legacyAzimuth * Math.PI / 180;
+      windDirection = { x: -Math.cos(radians), y: 0, z: -Math.sin(radians) };
+    } else {
+      windDirection = { ...DEFAULT_SETTINGS.windDirection };
+    }
+  }
+  const cleanComponent = value => Math.abs(value) < 1e-9 ? 0 : value;
+  windDirection = {
+    x: cleanComponent(clampNumber(windDirection.x, -10, 10, -1)),
+    y: cleanComponent(clampNumber(windDirection.y, -10, 10, 0)),
+    z: cleanComponent(clampNumber(windDirection.z, -10, 10, 0))
+  };
+  if (!isNonZeroVector(windDirection)) windDirection = { ...DEFAULT_SETTINGS.windDirection };
   const airDensity = clampNumber(stored.airDensity, 0.8, 1.5, DEFAULT_SETTINGS.airDensity);
   const metric = stored.metric === 'speed' ? 'speed' : 'pressure';
   const sectionAxis = ['X', 'Y', 'Z'].includes(stored.sectionAxis) ? stored.sectionAxis : DEFAULT_SETTINGS.sectionAxis;
   return {
     windSpeedMps,
-    windFromAzimuthDeg,
+    windDirection,
     airDensity,
     metric,
     sectionAxis,
@@ -883,6 +962,7 @@ function loadSettings() {
     display: {
       streamlines: stored.display?.streamlines !== false,
       particles: stored.display?.particles !== false,
+      volume: stored.display?.volume !== false,
       cage: stored.display?.cage !== false
     }
   };
@@ -893,13 +973,32 @@ function clampNumber(value, min, max, fallback) {
   return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
 }
 
-function directionLabel(degrees) {
-  const normalized = ((Number(degrees) % 360) + 360) % 360;
-  let label = '机头正面';
-  if (normalized > 45 && normalized <= 135) label = '右舷侧风';
-  else if (normalized > 135 && normalized <= 225) label = '尾部来流';
-  else if (normalized > 225 && normalized <= 315) label = '左舷侧风';
-  return `${formatNumber(normalized, 0)}° · ${label}`;
+function isNonZeroVector(direction) {
+  return direction && Math.hypot(direction.x, direction.y, direction.z) > 1e-6;
+}
+
+function sameDirection(left, right) {
+  return left && right
+    && Math.abs(left.x - right.x) < 1e-9
+    && Math.abs(left.y - right.y) < 1e-9
+    && Math.abs(left.z - right.z) < 1e-9;
+}
+
+function directionLabel(direction) {
+  if (!isNonZeroVector(direction)) return '方向向量不能为零';
+  const length = Math.hypot(direction.x, direction.y, direction.z);
+  const x = direction.x / length;
+  const y = direction.y / length;
+  const z = direction.z / length;
+  const labels = [];
+  if (x < -0.35) labels.push('机头来流');
+  else if (x > 0.35) labels.push('尾部来流');
+  if (z > 0.35) labels.push('左舷来流');
+  else if (z < -0.35) labels.push('右舷来流');
+  if (y > 0.35) labels.push('下方来流');
+  else if (y < -0.35) labels.push('上方来流');
+  const kind = labels.length ? labels.join(' · ') : '斜向复合来流';
+  return `(${formatNumber(x, 2)}, ${formatNumber(y, 2)}, ${formatNumber(z, 2)}) · ${kind}`;
 }
 
 function formatPressure(pa) {

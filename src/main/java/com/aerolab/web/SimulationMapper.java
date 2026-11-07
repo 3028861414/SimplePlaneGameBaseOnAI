@@ -15,9 +15,6 @@ import com.aerolab.web.dto.ModelDto;
 import com.aerolab.web.dto.SimulationRequest;
 import com.aerolab.web.dto.SimulationResponse;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 
@@ -65,7 +62,7 @@ public final class SimulationMapper {
         if (dto == null) {
             throw new IllegalArgumentException("来流条件不能为空");
         }
-        return new FlowConditions(dto.windSpeedMps(), dto.windFromAzimuthDeg(), dto.airDensity());
+        return new FlowConditions(toDomain(dto.direction(), "来流方向向量"), dto.windSpeedMps(), dto.airDensity());
     }
 
     private static Vec3 toDomain(ModelDto.Vec3Dto dto, String label) {
@@ -100,11 +97,11 @@ public final class SimulationMapper {
                         toDto(grid.stepZ()),
                         "i + nx * (j + ny * k)",
                         "base64-float32-le",
-                        encode(flow.speed()),
-                        encode(flow.pressureCoefficient()),
-                        encode(flow.velocityX()),
-                        encode(flow.velocityY()),
-                        encode(flow.velocityZ())
+                        BinaryEncoding.encodeFloats(flow.speed()),
+                        BinaryEncoding.encodeFloats(flow.pressureCoefficient()),
+                        BinaryEncoding.encodeFloats(flow.velocityX()),
+                        BinaryEncoding.encodeFloats(flow.velocityY()),
+                        BinaryEncoding.encodeFloats(flow.velocityZ())
                 ),
                 new SimulationResponse.SummaryDto(
                         summary.dynamicPressurePa(),
@@ -140,11 +137,4 @@ public final class SimulationMapper {
         return new ModelDto.Vec3Dto(value.x(), value.y(), value.z());
     }
 
-    private static String encode(float[] values) {
-        ByteBuffer buffer = ByteBuffer.allocate(values.length * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
-        for (float value : values) {
-            buffer.putFloat(value);
-        }
-        return Base64.getEncoder().encodeToString(buffer.array());
-    }
 }

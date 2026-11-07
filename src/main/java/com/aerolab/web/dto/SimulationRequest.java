@@ -6,8 +6,8 @@ public record SimulationRequest(
 ) {
 
     public record FlowConditionsDto(
+            ModelDto.Vec3Dto direction,
             double windSpeedMps,
-            double windFromAzimuthDeg,
             double airDensity
     ) {
     }

@@ -1,8 +1,12 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { Viewport } from '../core/viewport.js';
-import { PART_COLORS, SHAPE_INFO, createPart, uid } from '../core/model.js';
-import { escapeHtml, showToast } from '../core/ui.js';
+import { Viewport, disposeObject } from '../core/viewport.js';
+import {
+  BINDING_DEFINITIONS, FLIGHT_SYSTEM_META, PART_COLORS, SHAPE_INFO,
+  buildAircraftExport, createDefaultBindings, createPart, formatKeyCode, normalizeAircraft,
+  parseAircraftFile, safeAircraftFileName, uid
+} from '../core/model.js';
+import { escapeHtml, formatNumber, showToast } from '../core/ui.js';
 import { icon } from '../util/icons.js';
 import { makeUnitGeometry, disposePartGroup } from '../util/part-geometry.js';
 
@@ -24,21 +28,24 @@ const SIZE_HINTS = {
 };
 
 export class ModelEditor {
-  constructor({ container, overlay, headerActions, store, onSimulation }) {
+  constructor({ container, overlay, headerActions, store, onSimulation, onFlight }) {
     this.container = container;
     this.overlayHost = overlay;
     this.headerActions = headerActions;
     this.store = store;
     this.onSimulation = onSimulation;
+    this.onFlight = onFlight;
     this.model = store.snapshot();
     this.selectedId = null;
     this.transformMode = 'translate';
+    this.inspectorTab = 'assembly';
     this.pickMode = false;
     this.previewActive = false;
     this._previewLook = { yaw: 0, pitch: 0 };
     this._lookDrag = null;
     this._commitTimer = null;
     this._pointerStart = null;
+    this._capturingBinding = null;
     this._disposed = false;
     this._events = new AbortController();
 
@@ -50,6 +57,11 @@ export class ModelEditor {
     this.meshRoot = new THREE.Group();
     this.meshRoot.name = 'aircraft-parts';
     this.scene.add(this.meshRoot);
+
+    this.systemMarkerRoot = new THREE.Group();
+    this.systemMarkerRoot.name = 'flight-control-markers';
+    this.systemMarkerRoot.visible = false;
+    this.scene.add(this.systemMarkerRoot);
 
     this.partGroups = new Map();
     this.raycaster = new THREE.Raycaster();
@@ -164,7 +176,11 @@ export class ModelEditor {
               <div class="panel-kicker">场景结构</div>
               <h2>模型部件 <span class="count-badge" data-part-count>0</span></h2>
             </div>
-            <button class="icon-btn" type="button" data-action="reset" title="载入示例飞行器">${icon('reset', 16)}</button>
+            <div class="scene-tools">
+              <button class="icon-btn" type="button" data-action="import-aircraft" title="导入飞机 JSON">${icon('upload', 15)}</button>
+              <button class="icon-btn" type="button" data-action="export-aircraft" title="导出飞机 JSON">${icon('download', 15)}</button>
+              <button class="icon-btn" type="button" data-action="reset" title="载入示例飞行器">${icon('reset', 15)}</button>
+            </div>
           </div>
           <label class="model-name-row">
             <span>模型</span>
@@ -180,6 +196,10 @@ export class ModelEditor {
               <h2>部件与相机</h2>
             </div>
             <span class="inspector-shape-tag" data-selected-tag>未选择</span>
+          </div>
+          <div class="inspector-tabs" role="tablist" aria-label="属性检查器视图">
+            <button type="button" role="tab" class="is-active" data-inspector-tab="assembly">装配与相机</button>
+            <button type="button" role="tab" data-inspector-tab="flight">飞行系统</button>
           </div>
           <div class="inspector-scroll" data-inspector-body></div>
         </aside>
@@ -222,6 +242,7 @@ export class ModelEditor {
           <div class="cockpit-crosshair"></div>
           <div class="cockpit-frame"></div>
         </div>
+        <input type="file" accept=".json,.aerolab.json,application/json" data-import-input hidden>
       </div>
     `;
     this.ui = {
@@ -232,6 +253,7 @@ export class ModelEditor {
       modelName: this.overlayHost.querySelector('[data-model-name]'),
       pickBanner: this.overlayHost.querySelector('[data-pick-banner]'),
       preview: this.overlayHost.querySelector('[data-cockpit-preview]'),
+      importInput: this.overlayHost.querySelector('[data-import-input]'),
       saveStatus: null
     };
   }
@@ -242,56 +264,91 @@ export class ModelEditor {
         <span class="status-dot"></span>
         <span data-save-status>自动已保存</span>
       </div>
+      <button class="btn btn--ghost" type="button" data-action="fly">
+        ${icon('play', 14)}<span>试飞</span>
+      </button>
       <button class="btn btn--primary" type="button" data-action="simulate">
-        <span>进入模拟</span>${icon('chevron', 15)}
+        <span>风洞模拟</span>${icon('chevron', 15)}
       </button>
     `;
     this.ui.saveStatus = this.headerActions.querySelector('[data-save-status]');
     this.headerActions.onclick = event => {
-      if (event.target.closest('[data-action="simulate"]')) {
-        if (this.model.parts.length === 0) {
-          showToast('请先添加至少一个几何部件。', { type: 'error' });
-          return;
-        }
-        let repaired = false;
-        if (!this.model.name?.trim()) {
-          this.model.name = '未命名飞行器';
-          this.ui.modelName.value = this.model.name;
+      const action = event.target.closest('[data-action]')?.dataset.action;
+      if (action !== 'simulate' && action !== 'fly') return;
+      if (!this._prepareForNavigation()) return;
+      if (action === 'fly') this.onFlight?.();
+      else this.onSimulation?.();
+    };
+  }
+
+  _prepareForNavigation() {
+    if (this.model.parts.length === 0) {
+      showToast('请先添加至少一个几何部件。', { type: 'error' });
+      return false;
+    }
+    let repaired = false;
+    if (!this.model.name?.trim()) {
+      this.model.name = '未命名飞行器';
+      this.ui.modelName.value = this.model.name;
+      repaired = true;
+    }
+    for (const part of this.model.parts) {
+      if (!part.name?.trim()) {
+        part.name = SHAPE_INFO[part.shape]?.label ?? '部件';
+        repaired = true;
+      }
+      for (const axis of ['x', 'y', 'z']) {
+        if (!Number.isFinite(part.size[axis]) || part.size[axis] < 0.02) {
+          part.size[axis] = 0.02;
           repaired = true;
         }
-        for (const part of this.model.parts) {
-          if (!part.name?.trim()) {
-            part.name = SHAPE_INFO[part.shape]?.label ?? '部件';
-            repaired = true;
-          }
-          for (const axis of ['x', 'y', 'z']) {
-            if (!Number.isFinite(part.size[axis]) || part.size[axis] < 0.02) {
-              part.size[axis] = 0.02;
-              repaired = true;
-            }
-          }
-        }
-        if (repaired) this._rebuildScene();
-        this._cancelPick();
-        this._exitPreview();
-        this._commitNow();
-        this.store.flush();
-        this.onSimulation?.();
       }
-    };
+    }
+    if (repaired) this._rebuildScene();
+    this._cancelPick();
+    this._exitPreview();
+    this._commitNow();
+    this.store.flush();
+    return true;
   }
 
   _bindOverlay() {
     this.overlayHost.addEventListener('click', event => {
       const addButton = event.target.closest('[data-add-shape]');
       if (addButton) {
+        this._setInspectorTab('assembly');
         this.addPart(addButton.dataset.addShape);
+        return;
+      }
+
+      const inspectorTab = event.target.closest('[data-inspector-tab]');
+      if (inspectorTab) {
+        this._setInspectorTab(inspectorTab.dataset.inspectorTab);
         return;
       }
 
       const partRow = event.target.closest('[data-part-select]');
       if (partRow) {
+        this._setInspectorTab('assembly');
         this._select(partRow.dataset.partSelect);
+        return;
+      }
+
+      const addSystem = event.target.closest('[data-add-flight]');
+      if (addSystem) {
+        this._addFlightSystem(addSystem.dataset.addFlight);
+        return;
+      }
+
+      const removeSystem = event.target.closest('[data-remove-flight]');
+      if (removeSystem) {
+        this._removeFlightSystem(removeSystem.dataset.removeFlight, removeSystem.dataset.flightId);
+        return;
+      }
+
+      const bindingButton = event.target.closest('[data-binding-action]');
+      if (bindingButton) {
+        this._beginBindingCapture(bindingButton.dataset.bindingAction);
         return;
       }
 
@@ -313,9 +370,14 @@ export class ModelEditor {
 
     this.overlayHost.addEventListener('input', event => this._handleFieldInput(event), { signal: this._events.signal });
     this.overlayHost.addEventListener('change', event => {
+      if (event.target.matches('[data-import-input]')) {
+        this._handleImportFile(event.target.files?.[0]);
+        event.target.value = '';
+        return;
+      }
       if (event.target.matches('input')) {
         this._commitNow();
-        if (event.target.matches('[data-part-vec], [data-cockpit-vec], [data-cockpit-scalar]')) {
+        if (event.target.matches('[data-part-vec], [data-cockpit-vec], [data-cockpit-scalar], [data-flight-vec]')) {
           this._syncVisibleFields();
         }
       }
@@ -324,6 +386,22 @@ export class ModelEditor {
 
   _bindKeyboard() {
     window.addEventListener('keydown', event => {
+      if (this._capturingBinding) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.key !== 'Escape') {
+          const action = this._capturingBinding;
+          this.model.bindings[action] = event.code;
+          this._capturingBinding = null;
+          this._renderInspector();
+          this._commitNow();
+          showToast(`按键已绑定：${formatKeyCode(event.code)}`, { type: 'success', duration: 1800 });
+        } else {
+          this._capturingBinding = null;
+          this._renderInspector();
+        }
+        return;
+      }
       const typing = event.target.matches('input, textarea, select, [contenteditable="true"]');
       if (event.key === 'Escape') {
         if (this.previewActive) {
@@ -403,6 +481,7 @@ export class ModelEditor {
         return;
       }
       if (hit) {
+        this._setInspectorTab('assembly');
         this._select(hit.object.userData.partId);
       } else {
         this._select(null);
@@ -463,6 +542,18 @@ export class ModelEditor {
       case 'delete':
         this.deleteSelected();
         break;
+      case 'import-aircraft':
+        this.ui.importInput?.click();
+        break;
+      case 'export-aircraft':
+        this._exportAircraft();
+        break;
+      case 'reset-bindings':
+        this.model.bindings = createDefaultBindings();
+        this._renderInspector();
+        this._commitNow();
+        showToast('已恢复默认按键映射。', { type: 'success' });
+        break;
       default:
         break;
     }
@@ -472,6 +563,35 @@ export class ModelEditor {
     const input = event.target;
     if (input.matches('[data-model-name]')) {
       this.model.name = input.value;
+      this._scheduleCommit();
+      return;
+    }
+
+    if (input.matches('[data-flight-mass]')) {
+      const value = Number(input.value);
+      if (!Number.isFinite(value)) return;
+      this.model.flightSystems.massKg = THREE.MathUtils.clamp(value, 100, 100000);
+      this._scheduleCommit();
+      return;
+    }
+
+    if (input.matches('[data-flight-name], [data-flight-thrust], [data-flight-vec]')) {
+      const group = input.dataset.flightGroup;
+      const item = this.model.flightSystems[group]?.find(entry => entry.id === input.dataset.flightId);
+      if (!item) return;
+      if (input.matches('[data-flight-name]')) {
+        item.name = input.value;
+      } else if (input.matches('[data-flight-thrust]')) {
+        const value = Number(input.value);
+        if (!Number.isFinite(value)) return;
+        item.maxThrustN = THREE.MathUtils.clamp(value, 0, 200000);
+      } else {
+        const value = Number(input.value);
+        if (!Number.isFinite(value)) return;
+        const axis = input.dataset.flightAxis;
+        item.position[axis] = THREE.MathUtils.clamp(value, -2000, 2000);
+      }
+      this._updateSystemMarkers();
       this._scheduleCommit();
       return;
     }
@@ -585,6 +705,7 @@ export class ModelEditor {
     }
     this._select(this.selectedId);
     this._updateCockpitMarker();
+    this._updateSystemMarkers();
   }
 
   _createPartGroup(part) {
@@ -692,10 +813,13 @@ export class ModelEditor {
 
   _updateCounts() {
     if (this.ui?.partCount) this.ui.partCount.textContent = String(this.model.parts.length);
-    const simulateButton = this.headerActions.querySelector('[data-action="simulate"]');
-    if (simulateButton) {
-      simulateButton.disabled = this.model.parts.length === 0;
-      simulateButton.title = simulateButton.disabled ? '请先添加部件' : '开始气动模拟';
+    const disabled = this.model.parts.length === 0;
+    for (const action of ['simulate', 'fly']) {
+      const button = this.headerActions.querySelector(`[data-action="${action}"]`);
+      if (button) {
+        button.disabled = disabled;
+        button.title = disabled ? '请先添加部件' : (action === 'fly' ? '进入虚拟世界驾驶' : '开始气动风洞模拟');
+      }
     }
   }
 
@@ -708,15 +832,32 @@ export class ModelEditor {
     this._clearSelectionHelper();
 
     const group = this.selectedGroup();
-    if (group) {
+    if (group && this.inspectorTab === 'assembly') {
       this.transform.attach(group);
       this._createSelectionHelper(group);
       this.ui.selectedTag.textContent = this.selectedPart()?.name ?? '未选择';
+    } else if (this.inspectorTab === 'flight') {
+      this.ui.selectedTag.textContent = '飞行系统';
     } else {
       this.ui.selectedTag.textContent = '未选择';
     }
     this._renderInspector();
     this._updatePartListScroll();
+  }
+
+  _setInspectorTab(tab) {
+    if (!['assembly', 'flight'].includes(tab) || tab === this.inspectorTab) return;
+    this.inspectorTab = tab;
+    this._capturingBinding = null;
+    if (tab === 'flight') {
+      this.transform.detach();
+      this._clearSelectionHelper();
+    } else if (this.selectedGroup()) {
+      this.transform.attach(this.selectedGroup());
+      this._createSelectionHelper(this.selectedGroup());
+    }
+    this._updateSystemMarkerVisibility();
+    this._renderInspector();
   }
 
   _createSelectionHelper(group) {
@@ -751,6 +892,19 @@ export class ModelEditor {
 
   _renderInspector() {
     if (!this.ui?.inspector) return;
+    this.overlayHost.querySelectorAll('[data-inspector-tab]').forEach(button => {
+      const active = button.dataset.inspectorTab === this.inspectorTab;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-selected', String(active));
+    });
+    this.ui.selectedTag.textContent = this.inspectorTab === 'flight'
+      ? '飞行系统'
+      : (this.selectedPart()?.name ?? '未选择');
+    if (this.inspectorTab === 'flight') {
+      this.ui.inspector.innerHTML = this._flightSystemsMarkup();
+      this._updateSystemMarkerVisibility();
+      return;
+    }
     const part = this.selectedPart();
     let partMarkup = '';
 
@@ -799,6 +953,7 @@ export class ModelEditor {
     }
 
     this.ui.inspector.innerHTML = partMarkup + this._cockpitMarkup();
+    this._updateSystemMarkerVisibility();
   }
 
   _vectorFields(label, group, values, unit, step, attribute) {
@@ -858,7 +1013,288 @@ export class ModelEditor {
     `;
   }
 
+
+  _flightSystemsMarkup() {
+    const systems = this.model.flightSystems;
+    const totalThrust = (systems.engines ?? []).reduce((sum, engine) => sum + (Number(engine.maxThrustN) || 0), 0);
+    return `
+      <section class="inspector-section flight-overview">
+        <div class="section-heading">
+          <div>
+            <div class="panel-kicker">Flight Control Rig</div>
+            <h3>操纵系统布局</h3>
+          </div>
+          <span class="system-count">${(systems.engines?.length ?? 0)} × 引擎</span>
+        </div>
+        <div class="flight-overview-grid">
+          <label class="field">
+            <span>载具质量</span>
+            <div class="field-with-unit"><input type="number" min="100" max="100000" step="10" value="${formatField(systems.massKg)}" data-flight-mass><small>kg</small></div>
+          </label>
+          <div class="flight-readout"><span>最大总推力</span><strong>${formatNumber(totalThrust, 0)} <small>N</small></strong></div>
+        </div>
+        <p class="section-note">彩色控制点仅在实际驾驶时参与动力学；风洞只读取几何外形。位置为载具局部坐标，X 指向机头。</p>
+      </section>
+      ${this._flightSystemSection('engines', 'Propulsion', '推力作用点：Y/Z 偏移会产生配平力矩。', true)}
+      ${this._flightSystemSection('horizontalRudders', 'Horizontal Control', '俯仰舵面：X 力臂越大，抬头/低头控制越有效。')}
+      ${this._flightSystemSection('verticalRudders', 'Vertical Control', '偏航舵面：X 力臂与偏航灵敏度相关。')}
+      ${this._flightSystemSection('guns', 'Armament', '仅作为布局与按键预留，目前不产生射击效果。')}
+      <section class="inspector-section binding-section">
+        <div class="section-heading">
+          <div>
+            <div class="panel-kicker">Keyboard Mapping</div>
+            <h3>按键映射</h3>
+          </div>
+          <button class="icon-btn" type="button" data-action="reset-bindings" title="恢复默认按键">${icon('reset', 15)}</button>
+        </div>
+        <p class="section-note">点击按键后按下新的键，Esc 取消。映射随飞机文件一起导入导出。</p>
+        <div class="binding-list">
+          ${BINDING_DEFINITIONS.map(def => `
+            <div class="binding-row">
+              <span>${def.label}<small>${def.group}</small></span>
+              <button type="button" class="binding-key ${this._capturingBinding === def.action ? 'is-capturing' : ''}"
+                      data-binding-action="${def.action}">
+                ${this._capturingBinding === def.action ? '按下键盘…' : formatKeyCode(this.model.bindings[def.action])}
+              </button>
+            </div>
+          `).join('')}
+        </div>
+        ${this._bindingConflictMarkup()}
+      </section>
+    `;
+  }
+
+  _flightSystemSection(group, kicker, description, showThrust = false) {
+    const meta = FLIGHT_SYSTEM_META[group];
+    const items = this.model.flightSystems[group] ?? [];
+    const limit = group === 'guns' ? 16 : 12;
+    return `
+      <section class="inspector-section flight-system-section">
+        <div class="section-heading">
+          <div>
+            <div class="panel-kicker">${kicker}</div>
+            <h3><span class="system-color-dot" style="--system-color:${meta.color}"></span>${meta.label}</h3>
+          </div>
+          <button class="icon-btn" type="button" data-add-flight="${group}" title="添加${meta.label}" ${items.length >= limit ? 'disabled' : ''}>
+            ${icon('plus', 15)}
+          </button>
+        </div>
+        <p class="section-note">${description}</p>
+        ${items.length === 0 ? `
+          <div class="system-empty">尚未配置${meta.label}。驾驶时该通道将无效。</div>
+        ` : `
+          <div class="system-list">
+            ${items.map(item => this._flightSystemCard(group, item, showThrust)).join('')}
+          </div>
+        `}
+      </section>
+    `;
+  }
+
+  _flightSystemCard(group, item, showThrust) {
+    const meta = FLIGHT_SYSTEM_META[group];
+    return `
+      <div class="system-card" style="--system-color:${meta.color}">
+        <div class="system-card__head">
+          <span class="system-marker-dot"></span>
+          <input class="system-name" data-flight-name data-flight-group="${group}" data-flight-id="${escapeHtml(item.id)}"
+                 maxlength="60" value="${escapeHtml(item.name)}" spellcheck="false">
+          <button type="button" class="icon-btn icon-btn--danger" data-remove-flight="${group}" data-flight-id="${escapeHtml(item.id)}" title="删除${meta.label}">
+            ${icon('trash', 13)}
+          </button>
+        </div>
+        <div class="field-group">
+          <div class="field-group__head"><span>安装位置</span><small>m</small></div>
+          <div class="axis-inputs">
+            ${['x', 'y', 'z'].map(axis => `
+              <label class="axis-input">
+                <span>${axis.toUpperCase()}</span>
+                <input type="number" step="0.05" value="${formatField(item.position[axis])}"
+                       data-flight-vec data-flight-group="${group}" data-flight-id="${escapeHtml(item.id)}" data-flight-axis="${axis}">
+              </label>
+            `).join('')}
+          </div>
+        </div>
+        ${showThrust ? `
+          <label class="system-thrust">
+            <span>最大推力</span>
+            <div class="field-with-unit"><input type="number" min="0" max="200000" step="100" value="${formatField(item.maxThrustN)}" data-flight-thrust data-flight-group="${group}" data-flight-id="${escapeHtml(item.id)}"><small>N</small></div>
+          </label>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  _bindingConflictMarkup() {
+    const grouped = new Map();
+    for (const def of BINDING_DEFINITIONS) {
+      const code = this.model.bindings[def.action];
+      if (!grouped.has(code)) grouped.set(code, []);
+      grouped.get(code).push(def.label);
+    }
+    const conflicts = [...grouped.entries()].filter(([, labels]) => labels.length > 1);
+    if (conflicts.length === 0) return '<p class="binding-ok">映射无冲突</p>';
+    return `<p class="binding-warning">${conflicts.map(([code, labels]) => `${formatKeyCode(code)} 同时绑定：${labels.join('、')}`).join('；')}</p>`;
+  }
+
+  _addFlightSystem(group) {
+    const meta = FLIGHT_SYSTEM_META[group];
+    const items = this.model.flightSystems[group];
+    if (!meta || !Array.isArray(items)) return;
+    const limit = group === 'guns' ? 16 : 12;
+    if (items.length >= limit) {
+      showToast(`${meta.label}数量已达到上限。`, { type: 'error' });
+      return;
+    }
+    const anchor = this.selectedPart()?.position ?? { x: 0, y: 0, z: 0 };
+    const item = {
+      id: uid(meta.prefix),
+      name: `${meta.label} ${items.length + 1}`,
+      position: { x: round(anchor.x), y: round(anchor.y), z: round(anchor.z) }
+    };
+    if (group === 'engines') item.maxThrustN = 2200;
+    items.push(item);
+    this._updateSystemMarkers();
+    this._renderInspector();
+    this._commitNow();
+  }
+
+  _removeFlightSystem(group, id) {
+    const items = this.model.flightSystems[group];
+    if (!Array.isArray(items)) return;
+    const removed = items.find(item => item.id === id);
+    this.model.flightSystems[group] = items.filter(item => item.id !== id);
+    this._updateSystemMarkers();
+    this._renderInspector();
+    this._commitNow();
+    if (removed) showToast(`已删除 ${removed.name}。`, { type: 'info', duration: 1800 });
+  }
+
+  _beginBindingCapture(action) {
+    if (!BINDING_DEFINITIONS.some(def => def.action === action)) return;
+    this._capturingBinding = action;
+    this._renderInspector();
+    const button = this.ui.inspector.querySelector(`[data-binding-action="${cssEscape(action)}"]`);
+    button?.classList.add('is-capturing');
+    showToast('请按下要绑定的键盘按键，Esc 取消。', { type: 'info', duration: 2400 });
+  }
+
+  _updateSystemMarkers() {
+    if (!this.systemMarkerRoot) return;
+    for (const child of [...this.systemMarkerRoot.children]) {
+      this.systemMarkerRoot.remove(child);
+      disposeObject(child);
+    }
+    const systems = this.model.flightSystems;
+    if (!systems) return;
+    for (const group of Object.keys(FLIGHT_SYSTEM_META)) {
+      for (const item of systems[group] ?? []) {
+        this.systemMarkerRoot.add(this._createSystemMarker(group, item));
+      }
+    }
+    this._updateSystemMarkerVisibility();
+  }
+
+  _createSystemMarker(group, item) {
+    const meta = FLIGHT_SYSTEM_META[group];
+    const color = new THREE.Color(meta.color);
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.92,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false
+    });
+    const marker = new THREE.Group();
+    marker.position.set(item.position.x, item.position.y, item.position.z);
+    marker.scale.setScalar(3.2);
+    if (group === 'engines') {
+      const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.09, 0), material);
+      core.renderOrder = 32;
+      marker.add(core);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.009, 8, 30), material);
+      ring.rotation.y = Math.PI / 2;
+      ring.renderOrder = 32;
+      marker.add(ring);
+    } else if (group === 'horizontalRudders') {
+      const surface = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.025, 0.25), material);
+      surface.renderOrder = 32;
+      marker.add(surface);
+    } else if (group === 'verticalRudders') {
+      const surface = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.25, 0.025), material);
+      surface.renderOrder = 32;
+      marker.add(surface);
+    } else {
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), material);
+      dot.renderOrder = 32;
+      marker.add(dot);
+    }
+    marker.traverse(object => { object.frustumCulled = false; });
+    return marker;
+  }
+
+  _updateSystemMarkerVisibility() {
+    if (!this.systemMarkerRoot) return;
+    this.systemMarkerRoot.visible = this.inspectorTab === 'flight' && !this.previewActive;
+  }
+
+  async _handleImportFile(file) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const imported = parseAircraftFile(text);
+      this._exitPreview();
+      this._cancelPick();
+      this._resetArmed = false;
+      this._capturingBinding = null;
+      this.inspectorTab = 'assembly';
+      this.model = imported;
+      this.store.replace(imported, 'import');
+      this.selectedId = null;
+      this.ui.modelName.value = this.model.name;
+      this._rebuildScene();
+      this._updateSystemMarkers();
+      this._select(null);
+      this.fitView();
+      showToast('飞机文件导入成功。', { type: 'success', title: '导入完成' });
+    } catch (error) {
+      showToast(error.message || '飞机文件导入失败。', { type: 'error', title: '导入失败', duration: 5000 });
+    }
+  }
+
+  _exportAircraft() {
+    try {
+      const json = buildAircraftExport(this.model);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = safeAircraftFileName(this.model);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast('飞机结构与操纵配置已导出。', { type: 'success' });
+    } catch (error) {
+      showToast(error.message || '导出失败。', { type: 'error' });
+    }
+  }
+
   _syncVisibleFields() {
+    this.ui.inspector.querySelectorAll('[data-flight-vec]').forEach(input => {
+      const item = this.model.flightSystems[input.dataset.flightGroup]?.find(entry => entry.id === input.dataset.flightId);
+      if (item && document.activeElement !== input) {
+        input.value = formatField(item.position[input.dataset.flightAxis]);
+      }
+    });
+    this.ui.inspector.querySelectorAll('[data-flight-thrust]').forEach(input => {
+      const item = this.model.flightSystems[input.dataset.flightGroup]?.find(entry => entry.id === input.dataset.flightId);
+      if (item && document.activeElement !== input) input.value = formatField(item.maxThrustN);
+    });
+    this.ui.inspector.querySelectorAll('[data-flight-mass]').forEach(input => {
+      if (document.activeElement !== input) input.value = formatField(this.model.flightSystems.massKg);
+    });
     const part = this.selectedPart();
     if (!part) return;
     this.ui.inspector.querySelectorAll('[data-part-vec]').forEach(input => {
@@ -956,8 +1392,11 @@ export class ModelEditor {
     this.store.resetToDemo();
     this.model = this.store.snapshot();
     this.selectedId = null;
+    this.inspectorTab = 'assembly';
+    this._capturingBinding = null;
     this.ui.modelName.value = this.model.name;
     this._rebuildScene();
+    this._updateSystemMarkers();
     this.fitView();
     this._setSaveStatus('自动已保存', 'saved');
     showToast('已载入示例飞行器。', { type: 'success' });
@@ -1047,11 +1486,13 @@ export class ModelEditor {
     this._previewVisibility = {
       gizmo: this.transform.getHelper().visible,
       helper: this.selectionHelper?.visible ?? false,
-      marker: this.cockpitMarker.visible
+      marker: this.cockpitMarker.visible,
+      systems: this.systemMarkerRoot.visible
     };
     this.transform.getHelper().visible = false;
     if (this.selectionHelper) this.selectionHelper.visible = false;
     this.cockpitMarker.visible = false;
+    this.systemMarkerRoot.visible = false;
     this.overlayHost.classList.add('is-cockpit-preview');
     this.ui.preview.hidden = false;
     this._applyPreviewCamera();
@@ -1085,6 +1526,7 @@ export class ModelEditor {
       this.transform.getHelper().visible = this._previewVisibility.gizmo;
       if (this.selectionHelper) this.selectionHelper.visible = this._previewVisibility.helper;
       this.cockpitMarker.visible = this._previewVisibility.marker;
+      this.systemMarkerRoot.visible = this._previewVisibility.systems;
       this._previewVisibility = null;
     }
     for (const ghost of this._ghostMaterials ?? []) {

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 export class Viewport {
-  constructor(container) {
+  constructor(container, options = {}) {
     this.container = container;
     container.replaceChildren();
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
@@ -31,7 +31,7 @@ export class Viewport {
     this.clock = new THREE.Clock();
     this.frameListeners = new Set();
     this._disposed = false;
-    this._setupLighting();
+    if (options.studioLighting !== false) this._setupLighting();
     this._resizeObserver = new ResizeObserver(() => this.resize());
     this._resizeObserver.observe(container);
     this.resize();

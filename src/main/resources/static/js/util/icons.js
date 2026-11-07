@@ -45,7 +45,10 @@ export function icon(name, size = 18) {
     target: '<path d="M12 2v3a7 7 0 0 1 6.7 5h3.1v2h-3.1A7 7 0 0 1 12 19v3h-2v-3a7 7 0 0 1-6.7-5H2v-2h1.3A7 7 0 0 1 10 5V2h2Zm-1 5a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 3a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"/>',
     chevron: '<path d="m8.6 5.6 1.4-1.4L19.2 13 10 22.2l-1.4-1.4L16.4 13 8.6 5.6Z"/>',
     layers: '<path d="m12 3 9 5-9 5-9-5 9-5Zm0 7.9L5.4 7.3 12 10.9l6.6-3.6L12 10.9Zm0 3.9-9-5v2.5l9 5 9-5v-2.5l-9 5Z"/>',
-    reset: '<path d="M12 5V2L7 6.5 12 11V8a5 5 0 1 1-5 5H5a7 7 0 1 0 7-8Z"/>'
+    reset: '<path d="M12 5V2L7 6.5 12 11V8a5 5 0 1 1-5 5H5a7 7 0 1 0 7-8Z"/>',
+    upload: '<path d="M11 15V4.8L7.4 8.4 6 7l6-6 6 6-1.4 1.4L13 4.8V15h-2Zm-7 2h2v3h12v-3h2v5H4v-5Z"/>',
+    download: '<path d="M11 2h2v10.2l3.6-3.6L18 10l-6 6-6-6 1.4-1.4 3.6 3.6V2ZM4 17h2v3h12v-3h2v5H4v-5Z"/>',
+    check: '<path d="M9.2 16.2 3.8 10.8l1.4-1.4 4 4L16.8 5.8l1.4 1.4-9 9Z"/>'
   };
   return `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor">${paths[name] ?? ''}</svg>`;
 }

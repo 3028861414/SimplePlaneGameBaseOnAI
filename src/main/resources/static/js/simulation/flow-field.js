@@ -1,11 +1,5 @@
 import * as THREE from 'three';
-
-function decodeFloats(encoded) {
-  const binary = atob(encoded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Float32Array(bytes.buffer);
-}
+import { decodeFloat32Base64 } from '../util/binary.js';
 
 export class FlowFieldData {
   constructor(flow) {
@@ -20,11 +14,11 @@ export class FlowFieldData {
     this.axisY = this.stepY.clone().normalize();
     this.axisZ = this.stepZ.clone().normalize();
     this.stepLengths = [this.stepX.length(), this.stepY.length(), this.stepZ.length()];
-    this.speed = decodeFloats(flow.speed);
-    this.cp = decodeFloats(flow.pressureCoefficient);
-    this.vx = decodeFloats(flow.velocityX);
-    this.vy = decodeFloats(flow.velocityY);
-    this.vz = decodeFloats(flow.velocityZ);
+    this.speed = decodeFloat32Base64(flow.speed);
+    this.cp = decodeFloat32Base64(flow.pressureCoefficient);
+    this.vx = decodeFloat32Base64(flow.velocityX);
+    this.vy = decodeFloat32Base64(flow.velocityY);
+    this.vz = decodeFloat32Base64(flow.velocityZ);
     this.minCell = Math.min(...this.stepLengths);
     this.bounds = this._computeBounds();
   }
