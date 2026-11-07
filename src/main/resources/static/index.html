@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#081018">
+  <meta name="description" content="AEROLAB 交互式三维飞行器建模与风洞气动可视化">
+  <title>几何建模 · AEROLAB</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b151d'/%3E%3Cpath d='M6 22 16 5l10 17-10-5-10 5Z' fill='%235fe0c6'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./css/app.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/three.module.js",
+        "three/addons/": "./vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div class="ambient-grid" aria-hidden="true"></div>
+  <div id="app" class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <span class="brand-mark__wing brand-mark__wing--a"></span>
+          <span class="brand-mark__wing brand-mark__wing--b"></span>
+          <span class="brand-mark__axis"></span>
+        </div>
+        <div class="brand-copy">
+          <strong>AEROLAB</strong>
+          <span>DIGITAL WIND TUNNEL</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section-label">工作台 / Workspace</div>
+      <nav class="primary-nav" aria-label="主菜单">
+        <button class="nav-item is-active" type="button" data-view="modeling" aria-current="page" title="几何建模">
+          <span class="nav-item__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="21" height="21" fill="currentColor"><path d="M12 2 21 7v10l-9 5-9-5V7l9-5Zm0 2.3L5.4 8 12 11.7 18.6 8 12 4.3ZM5 9.8v6.3l6 3.3v-6.3L5 9.8Zm14 0-6 3.3v6.3l6-3.3V9.8Z"/></svg>
+          </span>
+          <span class="nav-item__copy"><strong>建模</strong><small>Model</small></span>
+          <span class="nav-item__index">01</span>
+        </button>
+        <button class="nav-item" type="button" data-view="simulation" title="气动模拟">
+          <span class="nav-item__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="21" height="21" fill="currentColor"><path d="M3 5h12v2H5v6h10v2H3V5Zm14 1h4v2h-2v8h2v2h-4V6ZM7 10h3v2H7v-2Zm4-2h2v6h-2V8Zm4-2h2v10h-2V6Z"/></svg>
+          </span>
+          <span class="nav-item__copy"><strong>模拟</strong><small>Simulate</small></span>
+          <span class="nav-item__index">02</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-spacer"></div>
+      <div class="sidebar-telemetry">
+        <span class="telemetry-dot"></span>
+        <div><strong>LOCAL SOLVER</strong><small>JAVA 25 · V1.0</small></div>
+      </div>
+      <div class="sidebar-footnote">Interactive aerodynamic<br>engineering workspace</div>
+    </aside>
+
+    <main class="workspace">
+      <header class="workspace-header">
+        <div class="header-copy">
+          <p id="header-kicker">Geometry Workbench</p>
+          <div class="header-title-row">
+            <h1 id="header-title">几何建模</h1>
+            <span id="header-context" class="header-context">AEROLAB X-01 · 10 部件</span>
+          </div>
+        </div>
+        <div id="header-actions" class="header-actions"></div>
+      </header>
+
+      <section id="stage" class="stage" data-mode="modeling">
+        <div class="stage-backdrop" aria-hidden="true">
+          <span class="stage-glow stage-glow--one"></span>
+          <span class="stage-glow stage-glow--two"></span>
+          <span class="stage-horizon"></span>
+          <span class="stage-noise"></span>
+        </div>
+        <div id="viewport" class="viewport" aria-label="三维视口"></div>
+        <div id="view-overlay" class="view-overlay"></div>
+        <div class="stage-coordinates" aria-hidden="true">
+          <span>X</span><span>Y</span><span>Z</span>
+          <i></i>
+          <small>RIGHT-HANDED / METRIC</small>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast-stack" class="toast-stack" role="status" aria-live="polite"></div>
+
+  <div id="boot-screen" class="boot-screen">
+    <div class="boot-mark">
+      <span></span><span></span><span></span>
+    </div>
+    <div class="boot-copy"><strong>AEROLAB</strong><span>初始化三维工作台…</span></div>
+  </div>
+
+  <noscript>
+    <div class="noscript">此应用需要启用 JavaScript 与 WebGL。</div>
+  </noscript>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
