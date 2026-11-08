@@ -4,10 +4,12 @@
  * implement the same small surface.
  */
 export class FlightSocket {
-  constructor({ onReady, onState, onChunks, onError, onClose } = {}) {
+  constructor({ onReady, onState, onChunks, onPlayers, onTraffic, onError, onClose } = {}) {
     this.onReady = onReady;
     this.onState = onState;
     this.onChunks = onChunks;
+    this.onPlayers = onPlayers;
+    this.onTraffic = onTraffic;
     this.onError = onError;
     this.onClose = onClose;
     this.ws = null;
@@ -47,11 +49,15 @@ export class FlightSocket {
       if (message.type === 'ready') {
         clearTimeout(this._readyTimer);
         this._ready = true;
-        this.onReady?.(message.world, message.state);
+        this.onReady?.(message.world, message.state, message.playerId, message.players ?? []);
       } else if (message.type === 'state') {
         this.onState?.(message.state);
       } else if (message.type === 'chunks') {
         this.onChunks?.(message);
+      } else if (message.type === 'players') {
+        this.onPlayers?.(message.players ?? []);
+      } else if (message.type === 'traffic') {
+        this.onTraffic?.(message.players ?? []);
       } else if (message.type === 'error') {
         this.onError?.(message.message || '飞行核心返回错误。');
       }
@@ -88,6 +94,18 @@ export class FlightSocket {
 
   setWeather(enabled) {
     this._send({ type: 'weather', enabled });
+  }
+
+  startAutopilot(template) {
+    this._send({ type: 'autopilot', template });
+  }
+
+  cancelAutopilot() {
+    this._send({ type: 'autopilot', template: 'none' });
+  }
+
+  updateProfile(name, color) {
+    this._send({ type: 'profile', name, color });
   }
 
   disconnect() {

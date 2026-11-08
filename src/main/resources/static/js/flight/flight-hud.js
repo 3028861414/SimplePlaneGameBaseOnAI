@@ -5,6 +5,13 @@ import { FlightMinimap } from './minimap.js';
 import { biomeLabel } from './terrain-style.js';
 
 const CARDINALS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+const AUTOPILOT_LABELS = {
+  takeoff: '起飞爬升',
+  circuit: '五边航线',
+  orbit: '水平盘旋',
+  roll: '横滚',
+  loop: '筋斗'
+};
 
 export class FlightHud {
   constructor(overlayHost, {
@@ -18,9 +25,16 @@ export class FlightHud {
     onWeatherChange,
     onFirstPersonHudChange,
     onEngineThrottle,
+    onSeedApply,
+    onPlayerNameChange,
+    onAutopilot,
+    onNitro,
     initialAirflow = true,
     initialWeather = false,
-    initialFirstPersonHud = true
+    initialFirstPersonHud = true,
+    initialSeed = '20261107',
+    initialPlayerName = '飞行员',
+    playerColor = '#35c6b1'
   }) {
     this.overlayHost = overlayHost;
     this.model = model;
@@ -33,9 +47,19 @@ export class FlightHud {
     this.onWeatherChange = onWeatherChange;
     this.onFirstPersonHudChange = onFirstPersonHudChange;
     this.onEngineThrottle = onEngineThrottle;
+    this.onSeedApply = onSeedApply;
+    this.onPlayerNameChange = onPlayerNameChange;
+    this.onAutopilot = onAutopilot;
+    this.onNitro = onNitro;
     this.airflowEnabled = Boolean(initialAirflow);
     this.weatherEnabled = Boolean(initialWeather);
     this.firstPersonHudEnabled = Boolean(initialFirstPersonHud);
+    this.seed = initialSeed;
+    this.playerName = initialPlayerName;
+    this.playerColor = playerColor;
+    this.identity = null;
+    this.players = [];
+    this._autopilotId = null;
     this._chunkSize = 512;
     this.cameraMode = 'third';
     this._lastPhase = '';
@@ -119,6 +143,25 @@ export class FlightHud {
             <i></i>
           </label>
           <div class="flight-options-divider"></div>
+          <div class="flight-profile-block">
+            <div class="flight-profile-head">
+              <span><b>玩家身份</b><small>同一浏览器保持相同 ID</small></span>
+              <code data-player-id>—</code>
+            </div>
+            <label class="flight-text-field">
+              <span>呼号</span>
+              <input type="text" data-player-name maxlength="24" value="${escapeHtml(this.playerName)}" spellcheck="false">
+            </label>
+            <label class="flight-text-field">
+              <span>世界种子</span>
+              <input type="text" data-seed-input maxlength="48" value="${escapeHtml(this.seed)}" spellcheck="false">
+            </label>
+            <div class="seed-actions">
+              <button type="button" class="btn btn--small btn--ghost" data-seed-random>生成代码</button>
+              <button type="button" class="btn btn--small btn--primary" data-seed-apply>应用并重生</button>
+            </div>
+          </div>
+          <div class="flight-options-divider"></div>
           <p class="flight-options-note">每台引擎的独立推力百分比已移至下方仪表盘的竖直推力条；也可在座舱视角直接拖动竖条。</p>
         </section>
 
@@ -134,8 +177,10 @@ export class FlightHud {
           <div class="flight-map-meta">
             <span data-map-biome>平原</span>
             <span data-map-loaded>0 区块</span>
+            <span data-world-seed>SEED —</span>
             <span data-weather-state>天气关</span>
           </div>
+          <div class="flight-players" data-player-list aria-label="同一世界的玩家"></div>
           <label class="chunk-range">
             <div class="chunk-range__head">
               <span>区块加载半径</span>
@@ -149,6 +194,31 @@ export class FlightHud {
         <div class="flight-notice" data-flight-notice>飞行核心生成中…</div>
         <div class="flight-warning" data-flight-warning hidden></div>
 
+        <aside class="flight-autopilot-panel">
+          <div class="panel-kicker">Flight Templates</div>
+          <div class="flight-autopilot-head">
+            <h3>自动飞行模板</h3>
+            <button type="button" class="icon-btn" data-autopilot-cancel hidden title="取消模板">×</button>
+          </div>
+          <div class="autopilot-grid">
+            ${[
+              ['takeoff', '起飞', '滑跑并爬升'],
+              ['circuit', '五边', '矩形航线'],
+              ['orbit', '盘旋', '保持高度'],
+              ['roll', '横滚', '360° 滚转'],
+              ['loop', '筋斗', '完整筋斗']
+            ].map(([id, title, detail]) => `
+              <button type="button" data-autopilot="${id}">
+                <strong>${title}</strong><small>${detail}</small>
+              </button>
+            `).join('')}
+          </div>
+          <div class="autopilot-status" data-autopilot-status>
+            <div><span data-autopilot-label>待命</span><b data-autopilot-progress-text>0%</b></div>
+            <div class="autopilot-progress"><i data-autopilot-progress></i></div>
+          </div>
+        </aside>
+
         <aside class="flight-controls-help">
           <div class="panel-kicker">Flight Controls</div>
           <h3>飞行操纵</h3>
@@ -161,7 +231,7 @@ export class FlightHud {
             ${this._bindingRow(bindings, 'yawRight', '右偏航')}
             ${this._bindingRow(bindings, 'rollLeft', '左滚转')}
             ${this._bindingRow(bindings, 'rollRight', '右滚转')}
-            ${this._bindingRow(bindings, 'boost', '加力')}
+            ${this._bindingRow(bindings, 'boost', '氮气加速')}
             ${this._bindingRow(bindings, 'brake', '刹车')}
             ${this._bindingRow(bindings, 'toggleCamera', '切换视角')}
             ${this._bindingRow(bindings, 'resetFlight', '重新起飞')}
@@ -250,6 +320,10 @@ export class FlightHud {
               </div>
               ${engineColumns ? `<div class="engine-rack">${engineColumns}</div>` : ''}
             </div>
+            <button type="button" class="nitro-meter" data-nitro-trigger title="氮气加速：4 秒双倍推力，冷却 12 秒">
+              <div class="nitro-meter__head"><span>NITRO</span><b data-nitro-label>就绪</b></div>
+              <div class="nitro-meter__track"><i data-nitro-fill></i></div>
+            </button>
             <div class="engine-meta">
               <span>推力</span>
               <strong data-thrust>0.0 kN</strong>
@@ -354,7 +428,19 @@ export class FlightHud {
       chunkRadius: this.overlayHost.querySelector('[data-chunk-radius]'),
       chunkRadiusInput: this.overlayHost.querySelector('[data-chunk-radius-input]'),
       chunkMin: this.overlayHost.querySelector('[data-chunk-min]'),
-      chunkMax: this.overlayHost.querySelector('[data-chunk-max]')
+      chunkMax: this.overlayHost.querySelector('[data-chunk-max]'),
+      playerId: this.overlayHost.querySelector('[data-player-id]'),
+      playerName: this.overlayHost.querySelector('[data-player-name]'),
+      seedInput: this.overlayHost.querySelector('[data-seed-input]'),
+      worldSeed: this.overlayHost.querySelector('[data-world-seed]'),
+      playerList: this.overlayHost.querySelector('[data-player-list]'),
+      nitroFill: this.overlayHost.querySelector('[data-nitro-fill]'),
+      nitroLabel: this.overlayHost.querySelector('[data-nitro-label]'),
+      nitroTrigger: this.overlayHost.querySelector('[data-nitro-trigger]'),
+      autopilotLabel: this.overlayHost.querySelector('[data-autopilot-label]'),
+      autopilotProgress: this.overlayHost.querySelector('[data-autopilot-progress]'),
+      autopilotProgressText: this.overlayHost.querySelector('[data-autopilot-progress-text]'),
+      autopilotCancel: this.overlayHost.querySelector('[data-autopilot-cancel]')
     };
     this.minimap = new FlightMinimap(this.ui.minimapCanvas);
     this._buildHeadingTape();
@@ -399,6 +485,29 @@ export class FlightHud {
       if (event.target.closest('[data-hud-restart]')) this.onRestart?.();
       if (event.target.closest('[data-hud-exit]')) this.onExit?.();
       if (event.target.closest('[data-hud-retry]')) this.onRetry?.();
+      if (event.target.closest('[data-seed-random]')) {
+        this.ui.seedInput.value = randomSeedCode();
+        return;
+      }
+      if (event.target.closest('[data-seed-apply]')) {
+        this.onSeedApply?.(this.ui.seedInput.value);
+        return;
+      }
+      const autopilot = event.target.closest('[data-autopilot]');
+      if (autopilot) {
+        this.onAutopilot?.(autopilot.dataset.autopilot);
+        return;
+      }
+      if (event.target.closest('[data-autopilot-cancel]')) {
+        this.onAutopilot?.('none');
+        return;
+      }
+      if (event.target.closest('[data-nitro-trigger]')) {
+        this.onNitro?.();
+      }
+    });
+    this.ui.playerName.addEventListener('change', () => {
+      this.onPlayerNameChange?.(this.ui.playerName.value);
     });
     this.ui.chunkRadiusInput.addEventListener('input', () => {
       const radius = Number(this.ui.chunkRadiusInput.value);
@@ -522,6 +631,74 @@ export class FlightHud {
     if (track) track.setAttribute('aria-valuenow', String(percent));
   }
 
+  setIdentity(identity) {
+    this.identity = identity;
+    if (this.ui.playerId) {
+      this.ui.playerId.textContent = identity?.shortId || '—';
+      this.ui.playerId.title = identity?.userId || '';
+    }
+  }
+
+  setSeed(seed) {
+    this.seed = seed || this.seed;
+    if (this.ui.seedInput) this.ui.seedInput.value = this.seed;
+    if (this.ui.worldSeed) this.ui.worldSeed.textContent = `SEED ${this.seed}`;
+  }
+
+  setPlayerName(name) {
+    this.playerName = name || this.playerName;
+    if (this.ui.playerName && document.activeElement !== this.ui.playerName) {
+      this.ui.playerName.value = this.playerName;
+    }
+  }
+
+  setPlayers(players, selfId) {
+    this.players = Array.isArray(players) ? players : [];
+    if (!this.ui.playerList) return;
+    const visible = this.players.filter(player => player.playerId !== selfId);
+    const self = this.players.find(player => player.playerId === selfId);
+    const items = [];
+    if (self) {
+      items.push(`<span class="flight-player is-self"><i style="--player-color:${escapeHtml(self.color || this.playerColor)}"></i>${escapeHtml(self.name || '我')}<b>你</b></span>`);
+    }
+    for (const player of visible) {
+      items.push(`<span class="flight-player"><i style="--player-color:${escapeHtml(player.color || '#35c6b1')}"></i>${escapeHtml(player.name || '飞行员')}</span>`);
+    }
+    this.ui.playerList.innerHTML = items.length
+      ? `<span class="flight-players__title">同一世界 · ${this.players.length} 人</span>${items.join('')}`
+      : '<span class="flight-players__title">单人世界 · 可邀请同种子玩家</span>';
+  }
+
+  setNitroState(active, remaining, cooldown, duration, cooldownDuration) {
+    if (!this.ui.nitroFill) return;
+    const ratio = active
+      ? Math.max(0, Math.min(1, remaining / Math.max(duration, 0.001)))
+      : cooldown > 0
+        ? Math.max(0, Math.min(1, 1 - cooldown / Math.max(cooldownDuration, 0.001)))
+        : 1;
+    this.ui.nitroFill.style.width = `${Math.round(ratio * 100)}%`;
+    this.ui.nitroTrigger?.classList.toggle('is-active', active);
+    this.ui.nitroTrigger?.classList.toggle('is-cooling', !active && cooldown > 0);
+    const label = active ? `喷射 ${remaining.toFixed(1)}s` : cooldown > 0 ? `冷却 ${cooldown.toFixed(1)}s` : '就绪';
+    this.ui.nitroLabel.textContent = label;
+  }
+
+  setAutopilotState(templateId, label, progress) {
+    const active = Boolean(templateId);
+    this._autopilotId = templateId || null;
+    this.ui.root.querySelectorAll('[data-autopilot]').forEach(button => {
+      button.classList.toggle('is-active', button.dataset.autopilot === templateId);
+    });
+    if (this.ui.autopilotCancel) this.ui.autopilotCancel.hidden = !active;
+    if (this.ui.autopilotLabel) this.ui.autopilotLabel.textContent = active ? label || '自动飞行' : '待命';
+    if (this.ui.autopilotProgress) {
+      this.ui.autopilotProgress.style.width = `${Math.round((progress ?? 0) * 100)}%`;
+    }
+    if (this.ui.autopilotProgressText) {
+      this.ui.autopilotProgressText.textContent = `${Math.round((progress ?? 0) * 100)}%`;
+    }
+  }
+
   setCameraMode(mode) {
     this.cameraMode = mode;
     this.ui.cameraLabel.textContent = `${mode === 'first' ? '第一人称' : '第三人称'} · ${this._key('toggleCamera')}`;
@@ -606,6 +783,19 @@ export class FlightHud {
         : '天气关';
       this.ui.weatherState.dataset.active = String(Boolean(state.weatherEnabled));
     }
+    this.setNitroState(
+      Boolean(state.nitroActive),
+      state.nitroRemainingSeconds ?? 0,
+      state.nitroCooldownSeconds ?? 0,
+      state.nitroDurationSeconds ?? 4,
+      state.nitroCooldownDurationSeconds ?? 12
+    );
+    if (state.autopilotTemplate) {
+      const label = AUTOPILOT_LABELS[state.autopilotTemplate] ?? '自动飞行';
+      this.setAutopilotState(state.autopilotTemplate, label, state.autopilotProgress ?? 0);
+    } else if (this._autopilotId) {
+      this.setAutopilotState(null, null, 0);
+    }
 
     this.ui.fphSpeed.textContent = formatNumber(knots, 0);
     this.ui.fphAltitude.textContent = formatNumber(Math.max(0, state.altitudeAglM), 0);
@@ -662,4 +852,11 @@ export class FlightHud {
     if (this._noticeTimer) clearTimeout(this._noticeTimer);
     this._noticeTimer = null;
   }
+}
+
+function randomSeedCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map(value => alphabet[value % alphabet.length]).join('');
 }

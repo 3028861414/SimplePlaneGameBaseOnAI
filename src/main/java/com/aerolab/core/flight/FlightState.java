@@ -32,6 +32,12 @@ public record FlightState(
         boolean crashed,
         boolean stalled,
         boolean outsideWorld,
-        String crashReason
+        String crashReason,
+        boolean nitroActive,
+        double nitroRemainingSeconds,
+        double nitroCooldownSeconds,
+        double nitroDurationSeconds,
+        double nitroCooldownDurationSeconds,
+        double nitroMultiplier
 ) {
 }

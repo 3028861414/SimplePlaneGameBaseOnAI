@@ -12,6 +12,19 @@ export class AerolabApi {
     this.baseUrl = baseUrl;
   }
 
+  async identity() {
+    const response = await fetch(`${this.baseUrl}/api/identity`, {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' }
+    });
+    const payload = await this.#parseBody(response);
+    if (!response.ok) {
+      throw new ApiError(payload?.detail || '无法获取用户身份', response.status, payload);
+    }
+    return payload;
+  }
+
   async simulate({ model, conditions, signal }) {
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(new DOMException('求解请求超时', 'TimeoutError')), 30000);

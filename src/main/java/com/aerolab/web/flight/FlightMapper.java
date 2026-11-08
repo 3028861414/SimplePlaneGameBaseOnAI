@@ -88,7 +88,12 @@ public final class FlightMapper {
         return new Vec3(value.x(), value.y(), value.z());
     }
 
-    public static FlightWorldDto toWorldDto(TerrainWorld world, List<TerrainChunk> chunks, int chunkRadius) {
+    public static FlightWorldDto toWorldDto(
+            TerrainWorld world,
+            List<TerrainChunk> chunks,
+            int chunkRadius,
+            String seed
+    ) {
         var runway = world.runway();
         var start = world.startPosition(1.42);
         List<TerrainChunkDto> chunkDtos = chunks.stream().map(FlightMapper::toChunkDto).toList();
@@ -109,7 +114,8 @@ public final class FlightMapper {
                         runway.elevation(),
                         runway.headingRadians()
                 ),
-                new ModelDto.Vec3Dto(start.x(), start.y(), start.z())
+                new ModelDto.Vec3Dto(start.x(), start.y(), start.z()),
+                seed
         );
     }
 

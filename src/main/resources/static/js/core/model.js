@@ -7,6 +7,59 @@ export const SHAPE_INFO = Object.freeze({
 
 export const PART_COLORS = ['#c9d7df', '#35c6b1', '#3f8fbf', '#e6a15c', '#b8c5d0', '#e06d5c', '#8c9dd6', '#6dcab3'];
 
+export const LIVERY_PRESETS = Object.freeze([
+  { id: 'teal', label: '极光青', primary: '#35c6b1', secondary: '#c9d7df', accent: '#e6a15c' },
+  { id: 'navy', label: '深海蓝', primary: '#3f8fbf', secondary: '#d8e2ea', accent: '#f0b35f' },
+  { id: 'crimson', label: '赤焰红', primary: '#d45a4f', secondary: '#e9dfd4', accent: '#2c7f8e' },
+  { id: 'violet', label: '暮光紫', primary: '#8c7bd8', secondary: '#d7d4e8', accent: '#57d6c4' },
+  { id: 'sunset', label: '日落橙', primary: '#e58a46', secondary: '#f1e3ce', accent: '#3d8f9c' },
+  { id: 'mono', label: '石墨灰', primary: '#8b9aa4', secondary: '#d2d9dc', accent: '#e6c35c' }
+]);
+
+export function createDefaultLivery() {
+  return { ...LIVERY_PRESETS[0] };
+}
+
+export function applyLiveryToModel(model, livery) {
+  const next = {
+    primary: normalizeHex(livery?.primary, LIVERY_PRESETS[0].primary),
+    secondary: normalizeHex(livery?.secondary, LIVERY_PRESETS[0].secondary),
+    accent: normalizeHex(livery?.accent, LIVERY_PRESETS[0].accent)
+  };
+  for (const part of model.parts ?? []) {
+    const role = liveryRole(part);
+    if (role === 'glass') continue;
+    part.color = next[role] ?? next.secondary;
+  }
+  return model;
+}
+
+export function liveryForModel(model) {
+  return {
+    primary: normalizeHex(model?.livery?.primary, inferLiveryColor(model, 'primary')),
+    secondary: normalizeHex(model?.livery?.secondary, inferLiveryColor(model, 'secondary')),
+    accent: normalizeHex(model?.livery?.accent, inferLiveryColor(model, 'accent'))
+  };
+}
+
+function inferLiveryColor(model, role) {
+  const parts = model?.parts ?? [];
+  const candidate = parts.find(part => liveryRole(part) === role);
+  return candidate?.color ?? createDefaultLivery()[role];
+}
+
+function liveryRole(part) {
+  const label = `${part?.id ?? ''} ${part?.name ?? ''}`.toLowerCase();
+  if (/座舱|canopy|glass/.test(label)) return 'glass';
+  if (/引擎|engine|短舱|nacelle|机炮|gun|进气/.test(label)) return 'accent';
+  if (part.liftingSurface || /翼|wing|尾翼|tail|stab|fin|舵/.test(label)) return 'primary';
+  return 'secondary';
+}
+
+function normalizeHex(value, fallback) {
+  return COLOR_PATTERN.test(value ?? '') ? value.toLowerCase() : fallback;
+}
+
 export const FLIGHT_SYSTEM_META = Object.freeze({
   engines: { label: '引擎', plural: '引擎', color: '#58e0c7', prefix: 'engine' },
   horizontalRudders: { label: '水平舵', plural: '水平舵', color: '#80d96b', prefix: 'elevator' },
@@ -17,7 +70,7 @@ export const FLIGHT_SYSTEM_META = Object.freeze({
 export const BINDING_DEFINITIONS = Object.freeze([
   { action: 'throttleUp', label: '增加油门', group: '动力' },
   { action: 'throttleDown', label: '减小油门', group: '动力' },
-  { action: 'boost', label: '加力推进', group: '动力' },
+  { action: 'boost', label: '氮气加速', group: '动力' },
   { action: 'pitchUp', label: '抬头 / 爬升', group: '姿态' },
   { action: 'pitchDown', label: '低头 / 俯冲', group: '姿态' },
   { action: 'yawLeft', label: '向左偏航', group: '姿态' },
@@ -179,6 +232,7 @@ export function createDemoAircraft() {
     version: 3,
     name: 'AEROLAB X-01',
     parts,
+    livery: createDefaultLivery(),
     cockpit: {
       position: vec3(1.22, 0.72, 0),
       yawDegrees: 0,
@@ -217,6 +271,7 @@ export function normalizeAircraft(raw) {
     version: 3,
     name: normalizeText(source.name, '未命名飞行器', 80),
     parts,
+    livery: normalizeLivery(source.livery, parts),
     cockpit,
     flightSystems: normalizeFlightSystems(source.flightSystems),
     bindings: normalizeBindings(source.bindings)
@@ -360,6 +415,15 @@ function normalizeParts(rawParts) {
     });
   }
   return parts;
+}
+
+function normalizeLivery(raw, parts) {
+  const fallback = createDefaultLivery();
+  return {
+    primary: normalizeHex(raw?.primary, parts.find(part => liveryRole(part) === 'primary')?.color ?? fallback.primary),
+    secondary: normalizeHex(raw?.secondary, parts.find(part => liveryRole(part) === 'secondary')?.color ?? fallback.secondary),
+    accent: normalizeHex(raw?.accent, parts.find(part => liveryRole(part) === 'accent')?.color ?? fallback.accent)
+  };
 }
 
 function normalizeFlightSystems(raw) {

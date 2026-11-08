@@ -8,6 +8,12 @@ server:
 spring:
   application:
     name: aerolab-windtunnel
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          no-cache: true
+          no-store: true
   jackson:
     default-property-inclusion: non_null
 

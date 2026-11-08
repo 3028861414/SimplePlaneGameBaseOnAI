@@ -23,6 +23,7 @@ export class FlightWorldScene {
     this.scene.fog = new THREE.Fog(0xb7d2dc, 280, 1700);
 
     this.world = null;
+    this.runwayGroup = null;
     this.chunks = new Map();
     this.chunkGroups = new Map();
     this.chunkQueue = [];
@@ -52,6 +53,9 @@ export class FlightWorldScene {
     this._events = new AbortController();
     this._disposed = false;
     this._chunkDrainScheduled = false;
+    this.remotePlayers = new Map();
+    this.remoteProfiles = new Map();
+    this.pendingTraffic = new Map();
 
     this.chunkMaterials = {
       terrain: new THREE.MeshStandardMaterial({
@@ -141,16 +145,27 @@ export class FlightWorldScene {
   }
 
   _buildAircraft() {
+    const built = this._createAircraftGroup(this.model.parts);
     this.aircraft = new THREE.Group();
     this.aircraft.name = 'flight-aircraft';
-    this.aircraftModel = new THREE.Group();
-    this.aircraftModel.name = 'flight-aircraft-model';
-    this.centerOfMass = new THREE.Vector3();
-    for (const part of this.model.parts) {
+    this.aircraftModel = built.model;
+    this.centerOfMass = built.centerOfMass;
+    this.aircraftModel.position.copy(this.centerOfMass).multiplyScalar(-1);
+    this.aircraft.add(this.aircraftModel);
+    this.aircraft.visible = false;
+    this.scene.add(this.aircraft);
+  }
+
+  _createAircraftGroup(parts) {
+    const model = new THREE.Group();
+    model.name = 'flight-aircraft-model';
+    const centerOfMass = new THREE.Vector3();
+    let totalMass = 0;
+    for (const part of parts ?? []) {
       const geometry = makeUnitGeometry(part.shape);
       const canopy = (part.name ?? '').includes('舱') || String(part.color).toLowerCase() === '#123d49';
       const material = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(part.color),
+        color: new THREE.Color(part.color || '#c9d7df'),
         roughness: canopy ? 0.15 : 0.48,
         metalness: canopy ? 0.25 : 0.32,
         transparent: canopy,
@@ -165,14 +180,142 @@ export class FlightWorldScene {
         THREE.MathUtils.degToRad(part.rotation.z)
       );
       mesh.scale.set(part.size.x, part.size.y, part.size.z);
-      this.aircraftModel.add(mesh);
+      model.add(mesh);
+      const mass = Math.max(0.001, Number(part.massKg) || 1);
+      centerOfMass.addScaledVector(mesh.position, mass);
+      totalMass += mass;
     }
-    this.aircraft.add(this.aircraftModel);
-    this.aircraft.visible = false;
-    this.scene.add(this.aircraft);
+    if (totalMass > 0) centerOfMass.multiplyScalar(1 / totalMass);
+    model.position.copy(centerOfMass).multiplyScalar(-1);
+    return { model, centerOfMass, group: model };
+  }
+
+  setPlayerProfiles(players, selfId) {
+    const nextProfiles = new Map((players ?? []).map(player => [player.playerId, player]));
+    for (const [playerId, remote] of this.remotePlayers) {
+      if (!nextProfiles.has(playerId)) {
+        this._removeRemotePlayer(playerId);
+      }
+    }
+    for (const player of players ?? []) {
+      if (player.playerId === selfId) continue;
+      this.remoteProfiles.set(player.playerId, player);
+      if (!this.remotePlayers.has(player.playerId)) {
+        this._createRemotePlayer(player);
+      }
+    }
+    for (const player of players ?? []) {
+      if (player.playerId === selfId) continue;
+      const remote = this.remotePlayers.get(player.playerId);
+      const pending = this.pendingTraffic.get(player.playerId);
+      if (remote && pending) {
+        this._setRemoteTarget(remote, pending);
+        this.pendingTraffic.delete(player.playerId);
+      }
+    }
+  }
+
+  _createRemotePlayer(profile) {
+    const group = new THREE.Group();
+    group.name = `remote-player-${profile.playerId}`;
+    const built = this._createAircraftGroup(profile.model?.parts ?? []);
+    group.add(built.model);
+    const label = this._createPlayerLabel(profile);
+    label.position.set(0, 5.2, 0);
+    group.add(label);
+    group.visible = false;
+    this.scene.add(group);
+    this.remotePlayers.set(profile.playerId, {
+      group,
+      label,
+      targetPosition: new THREE.Vector3(),
+      targetQuaternion: new THREE.Quaternion(),
+      hasTarget: false
+    });
+  }
+
+  _createPlayerLabel(profile) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 64;
+    const context = canvas.getContext('2d');
+    context.clearRect(0, 0, 256, 64);
+    context.fillStyle = 'rgba(6, 20, 25, 0.78)';
+    context.roundRect?.(4, 8, 248, 44, 12);
+    context.fill();
+    context.strokeStyle = profile.color || '#35c6b1';
+    context.lineWidth = 3;
+    context.stroke();
+    context.fillStyle = '#e9f6f4';
+    context.font = '600 22px sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText((profile.name || '飞行员').slice(0, 14), 128, 31);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: texture, transparent: true, depthWrite: false, toneMapped: false
+    }));
+    sprite.scale.set(8, 2, 1);
+    return sprite;
+  }
+
+  applyTraffic(players, selfId) {
+    for (const player of players ?? []) {
+      if (player.playerId === selfId || !player.state) continue;
+      const remote = this.remotePlayers.get(player.playerId);
+      if (!remote) {
+        this.pendingTraffic.set(player.playerId, player.state);
+        continue;
+      }
+      this._setRemoteTarget(remote, player.state);
+    }
+  }
+
+  _setRemoteTarget(remote, state) {
+    remote.targetPosition.set(state.position.x, state.position.y, state.position.z);
+    remote.targetQuaternion.set(
+      state.orientation.x,
+      state.orientation.y,
+      state.orientation.z,
+      state.orientation.w
+    ).normalize();
+    if (!remote.hasTarget) {
+      remote.group.position.copy(remote.targetPosition);
+      remote.group.quaternion.copy(remote.targetQuaternion);
+      remote.group.visible = true;
+      remote.hasTarget = true;
+    }
+  }
+
+  _removeRemotePlayer(playerId) {
+    const remote = this.remotePlayers.get(playerId);
+    if (!remote) return;
+    this.scene.remove(remote.group);
+    remote.group.traverse(object => {
+      object.geometry?.dispose?.();
+      object.material?.map?.dispose?.();
+      object.material?.dispose?.();
+    });
+    this.remotePlayers.delete(playerId);
+    this.remoteProfiles.delete(playerId);
+    this.pendingTraffic.delete(playerId);
   }
 
   setWorld(worldDto) {
+    if (this.world) {
+      for (const key of [...this.chunks.keys()]) this._unloadChunk(key);
+      if (this.runwayGroup) {
+        this.scene.remove(this.runwayGroup);
+        this.runwayGroup.traverse(object => {
+          object.geometry?.dispose?.();
+          object.material?.map?.dispose?.();
+          object.material?.dispose?.();
+        });
+        this.runwayGroup = null;
+        this.runway = null;
+      }
+    }
     this.world = worldDto;
     this.chunkSize = worldDto.chunkSize || 512;
     this.chunkResolution = worldDto.chunkResolution || 65;
@@ -530,12 +673,14 @@ export class FlightWorldScene {
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -2
     });
+    const group = new THREE.Group();
+    group.name = 'runway';
     const surface = new THREE.Mesh(geometry, material);
     surface.rotation.x = -Math.PI / 2;
     surface.rotation.z = -runway.headingRadians;
     surface.position.set(runway.centerX, runway.elevation + 0.08, runway.centerZ);
     this.runway = surface;
-    this.scene.add(surface);
+    group.add(surface);
 
     const lightGeometry = new THREE.BoxGeometry(0.34, 0.12, 0.34);
     const lightMaterial = new THREE.MeshBasicMaterial({ color: 0xfff2c5, toneMapped: false });
@@ -555,7 +700,9 @@ export class FlightWorldScene {
       }
     }
     lights.instanceMatrix.needsUpdate = true;
-    this.scene.add(lights);
+    group.add(lights);
+    this.runwayGroup = group;
+    this.scene.add(group);
   }
 
   toggleCamera() {
@@ -656,6 +803,12 @@ export class FlightWorldScene {
 
     this.aircraft.position.copy(this.currentPosition);
     this.aircraft.quaternion.copy(this.currentQuaternion);
+    const remoteBlend = 1 - Math.exp(-Math.min(dt, 0.05) * 9);
+    for (const remote of this.remotePlayers.values()) {
+      if (!remote.hasTarget) continue;
+      remote.group.position.lerp(remote.targetPosition, remoteBlend);
+      remote.group.quaternion.slerp(remote.targetQuaternion, remoteBlend);
+    }
     this._followWorld();
     this.airflow?.update(dt, this.currentPosition, this.currentQuaternion, this.state?.velocity, this.state?.windVelocity);
     this.weather?.update(dt, this.currentPosition, this.state?.windVelocity);
@@ -733,6 +886,7 @@ export class FlightWorldScene {
   dispose() {
     this._disposed = true;
     this._events.abort();
+    for (const playerId of [...this.remotePlayers.keys()]) this._removeRemotePlayer(playerId);
     this.airflow?.dispose();
     this.weather?.dispose();
     this.viewport.dispose();

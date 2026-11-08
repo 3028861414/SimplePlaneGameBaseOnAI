@@ -8,7 +8,7 @@ const BOX = HALF_BOX.clone().multiplyScalar(2);
  * frame so the effect stays visible from both cockpit and chase cameras.
  */
 export class AirflowParticles {
-  constructor(scene, count = 150) {
+  constructor(scene, count = 340) {
     this.scene = scene;
     this.count = count;
     this.enabled = true;
@@ -26,7 +26,7 @@ export class AirflowParticles {
     this.material = new THREE.LineBasicMaterial({
       color: 0x9fe8ff,
       transparent: true,
-      opacity: 0.34,
+      opacity: 0.62,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       toneMapped: false
@@ -63,8 +63,8 @@ export class AirflowParticles {
     const dirX = speed > 1e-5 ? this._air.x / speed : -1;
     const dirY = speed > 1e-5 ? this._air.y / speed : 0;
     const dirZ = speed > 1e-5 ? this._air.z / speed : 0;
-    const streakLength = THREE.MathUtils.clamp(0.14 + speed * 0.035, 0.14, 2.6);
-    const travel = step * 0.22;
+    const streakLength = THREE.MathUtils.clamp(0.22 + speed * 0.045, 0.22, 3.4);
+    const travel = step * 0.32;
 
     const local = this._local;
     const positions = this._positions;

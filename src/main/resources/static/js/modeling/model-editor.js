@@ -2,10 +2,11 @@ import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { Viewport, disposeObject } from '../core/viewport.js';
 import {
-  BINDING_DEFINITIONS, FLIGHT_SYSTEM_META, PART_COLORS, SHAPE_INFO,
-  buildAircraftExport, createDefaultBindings, createPart, formatKeyCode, normalizeAircraft,
-  parseAircraftFile, safeAircraftFileName, uid
+  BINDING_DEFINITIONS, FLIGHT_SYSTEM_META, LIVERY_PRESETS, PART_COLORS, SHAPE_INFO,
+  applyLiveryToModel, buildAircraftExport, createDefaultBindings, createPart, formatKeyCode,
+  liveryForModel, normalizeAircraft, parseAircraftFile, safeAircraftFileName, uid
 } from '../core/model.js';
+import { createAircraftPreset, listAircraftPresets } from '../core/aircraft-presets.js';
 import { escapeHtml, formatNumber, showToast } from '../core/ui.js';
 import { icon } from '../util/icons.js';
 import { makeUnitGeometry, disposePartGroup } from '../util/part-geometry.js';
@@ -196,6 +197,9 @@ export class ModelEditor {
             <span>模型</span>
             <input data-model-name maxlength="80" spellcheck="false" value="${escapeHtml(this.model.name ?? '')}">
           </label>
+          <details class="livery-panel" data-livery-panel>
+            ${this._liveryMarkup()}
+          </details>
           <div class="part-list" data-part-list></div>
         </section>
 
@@ -293,6 +297,52 @@ export class ModelEditor {
     };
   }
 
+  _liveryMarkup() {
+    const livery = liveryForModel(this.model);
+    const presets = listAircraftPresets();
+    return `
+      <summary class="livery-head">
+        <span><span class="panel-kicker">Livery / 机库</span><b>涂装与预设机体</b></span>
+        <span class="livery-current" data-livery-summary>${escapeHtml(livery.primary.toUpperCase())}</span>
+      </summary>
+      <div class="livery-body">
+      <label class="preset-select-row">
+        <span>预设机体</span>
+        <select data-preset-select>
+          ${presets.map(preset => `<option value="${escapeHtml(preset.id)}">${escapeHtml(preset.name)}</option>`).join('')}
+        </select>
+        <button class="btn btn--small btn--ghost" type="button" data-action="load-preset">载入</button>
+      </label>
+      <div class="livery-color-row">
+        ${['primary', 'secondary', 'accent'].map(role => `
+          <label class="livery-color">
+            <span>${role === 'primary' ? '主色' : role === 'secondary' ? '辅色' : '点缀'}</span>
+            <input type="color" data-livery-color="${role}" value="${escapeHtml(livery[role])}">
+          </label>
+        `).join('')}
+      </div>
+      <div class="livery-swatches">
+        ${LIVERY_PRESETS.map(preset => `
+          <button type="button" class="livery-swatch" data-livery-preset="${preset.id}"
+                  title="${escapeHtml(preset.label)}"
+                  style="--livery-primary:${preset.primary};--livery-secondary:${preset.secondary};--livery-accent:${preset.accent}">
+            <i></i><i></i><i></i>
+          </button>
+        `).join('')}
+      </div>
+      <p class="livery-hint">涂装会自动应用到机体、翼面与动力舱，并随模型一起导入导出。</p>
+      </div>
+    `;
+  }
+
+  _refreshLiveryPanel() {
+    const panel = this.overlayHost.querySelector('[data-livery-panel]');
+    if (!panel) return;
+    const open = panel.open;
+    panel.innerHTML = this._liveryMarkup();
+    panel.open = open;
+  }
+
   _prepareForNavigation() {
     if (this.model.parts.length === 0) {
       showToast('请先添加至少一个几何部件。', { type: 'error' });
@@ -373,6 +423,13 @@ export class ModelEditor {
       const swatch = event.target.closest('[data-part-color-value]');
       if (swatch && this.selectedId) {
         this._setPartColor(swatch.dataset.partColorValue);
+        return;
+      }
+
+      const liveryPreset = event.target.closest('[data-livery-preset]');
+      if (liveryPreset) {
+        const preset = LIVERY_PRESETS.find(item => item.id === liveryPreset.dataset.liveryPreset);
+        if (preset) this._applyLivery(preset);
         return;
       }
 
@@ -534,8 +591,42 @@ export class ModelEditor {
     return this.raycaster.intersectObjects(meshes, false)[0] ?? null;
   }
 
+  _applyLivery(livery, { refreshPanel = true } = {}) {
+    this._recordHistory(false);
+    this.model.livery = {
+      primary: livery.primary,
+      secondary: livery.secondary,
+      accent: livery.accent
+    };
+    applyLiveryToModel(this.model, this.model.livery);
+    this._rebuildScene();
+    if (refreshPanel) this._refreshLiveryPanel();
+    else {
+      const summary = this.overlayHost.querySelector('[data-livery-summary]');
+      if (summary) summary.textContent = this.model.livery.primary.toUpperCase();
+    }
+    this._scheduleCommit();
+  }
+
+  _loadAircraftPreset() {
+    const select = this.overlayHost.querySelector('[data-preset-select]');
+    const preset = createAircraftPreset(select?.value);
+    this._recordHistory(true);
+    this.model = normalizeAircraft(preset);
+    this.selectedId = null;
+    this.ui.modelName.value = this.model.name;
+    this._rebuildScene();
+    this._refreshLiveryPanel();
+    this._renderInspector();
+    this._commitNow();
+    showToast(`已载入预设：${this.model.name}`, { type: 'success' });
+  }
+
   _handleAction(action) {
     switch (action) {
+      case 'load-preset':
+        this._loadAircraftPreset();
+        break;
       case 'reset':
         this._resetToDemo();
         break;
@@ -590,6 +681,12 @@ export class ModelEditor {
   _handleFieldInput(event) {
     const input = event.target;
     this._recordHistory(false);
+    if (input.matches('[data-livery-color]')) {
+      const livery = liveryForModel(this.model);
+      livery[input.dataset.liveryColor] = input.value;
+      this._applyLivery(livery, { refreshPanel: false });
+      return;
+    }
     if (input.matches('[data-model-name]')) {
       this.model.name = input.value;
       this._scheduleCommit();

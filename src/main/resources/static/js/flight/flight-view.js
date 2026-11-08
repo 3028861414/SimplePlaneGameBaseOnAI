@@ -1,4 +1,5 @@
 import { showToast } from '../core/ui.js';
+import { AerolabApi } from '../core/api.js';
 import { icon } from '../util/icons.js';
 import { normalizeAircraft } from '../core/model.js';
 import { FlightWorldScene } from './world-scene.js';
@@ -14,6 +15,8 @@ const AIRFLOW_KEY = 'aerolab.flight.airflow.v1';
 const WEATHER_KEY = 'aerolab.flight.weather.v1';
 const FIRST_PERSON_HUD_KEY = 'aerolab.flight.first-person-hud.v1';
 const DEFAULT_CHUNK_RADIUS = 3;
+const SEED_KEY = 'aerolab.world.seed.v1';
+const PLAYER_NAME_KEY = 'aerolab.player.name.v1';
 
 export class FlightView {
   constructor({ container, overlay, headerActions, store, onExit }) {
@@ -29,6 +32,13 @@ export class FlightView {
     this.airflowEnabled = loadBoolean(AIRFLOW_KEY, true);
     this.weatherEnabled = loadBoolean(WEATHER_KEY, false);
     this.firstPersonHudEnabled = loadBoolean(FIRST_PERSON_HUD_KEY, true);
+    this.seed = loadString(SEED_KEY, '20261107');
+    this.playerName = loadString(PLAYER_NAME_KEY, '飞行员');
+    this.identity = null;
+    this.identityPromise = new AerolabApi().identity().catch(error => {
+      console.warn('Unable to resolve player identity', error);
+      return { userId: '', shortId: 'LOCAL' };
+    });
 
     this.scene = new FlightWorldScene(container, this.model);
     this.scene.setAirflowVisible(this.airflowEnabled);
@@ -44,9 +54,16 @@ export class FlightView {
       onWeatherChange: value => this._setWeather(value),
       onFirstPersonHudChange: value => this._setFirstPersonHud(value),
       onEngineThrottle: (engineId, value) => this.socket?.setEngineThrottle(engineId, value),
+      onSeedApply: value => this._applySeed(value),
+      onPlayerNameChange: value => this._setPlayerName(value),
+      onAutopilot: template => this.socket?.startAutopilot(template),
+      onNitro: () => this._triggerNitro(),
       initialAirflow: this.airflowEnabled,
       initialWeather: this.weatherEnabled,
-      initialFirstPersonHud: this.firstPersonHudEnabled
+      initialFirstPersonHud: this.firstPersonHudEnabled,
+      initialSeed: this.seed,
+      initialPlayerName: this.playerName,
+      playerColor: this.model.livery?.primary ?? '#35c6b1'
     });
     this.hud.setCameraMode('third');
     this.hud.setWeatherEnabled(this.weatherEnabled);
@@ -80,7 +97,9 @@ export class FlightView {
     this.ui.link.dataset.state = state;
   }
 
-  _connect() {
+  async _connect() {
+    if (this._disposed) return;
+    if (!this.identity) this.identity = await this.identityPromise;
     if (this._disposed) return;
     this._ready = false;
     this._releaseKeys();
@@ -88,9 +107,11 @@ export class FlightView {
     this.hud.setLoading('正在生成虚拟世界', '连接飞行核心、铺设跑道并构建柏林噪声地形…');
     this._setLinkState('连接飞行核心', 'connecting');
     this.socket = new FlightSocket({
-      onReady: (world, state) => this._onReady(world, state),
+      onReady: (world, state, playerId, players) => this._onReady(world, state, playerId, players),
       onState: state => this._onState(state),
       onChunks: message => this._onChunks(message),
+      onPlayers: players => this._onPlayers(players),
+      onTraffic: players => this._onTraffic(players),
       onError: message => this._onSocketError(message),
       onClose: (code, reason) => this._onSocketClose(code, reason)
     });
@@ -102,12 +123,18 @@ export class FlightView {
       },
       flightSystems: this.model.flightSystems,
       bindings: this.model.bindings,
-      chunkRadius: this.chunkRadius
+      chunkRadius: this.chunkRadius,
+      seed: this.seed,
+      playerName: this.playerName,
+      playerColor: this.model.livery?.primary ?? '#35c6b1'
     });
   }
 
-  _onReady(world, state) {
+  _onReady(world, state, playerId, players) {
     if (this._disposed) return;
+    this._playerId = playerId ?? this.identity?.userId ?? '';
+    this.seed = world.seed ?? this.seed;
+    saveString(SEED_KEY, this.seed);
     this._ready = true;
     this.chunkRadius = world.chunkRadius ?? this.chunkRadius;
     if (!this._worldBuilt) {
@@ -125,6 +152,11 @@ export class FlightView {
       chunkSize: world.chunkSize
     });
     this.hud.hideLoading();
+    this.hud.setIdentity(this.identity);
+    this.hud.setSeed(this.seed);
+    this.hud.setPlayerName(this.playerName);
+    this.hud.setPlayers(players ?? [], this._playerId);
+    this.scene.setPlayerProfiles(players ?? [], this._playerId);
     if (this.weatherEnabled) this.socket?.setWeather(true);
     this.hud.update(state, this.scene.getMapData());
     this._setLinkState('实时飞行 · 60 Hz', 'live');
@@ -144,6 +176,43 @@ export class FlightView {
   _onChunks(message) {
     if (this._disposed) return;
     this.scene.applyChunkUpdate(message.added, message.removed);
+  }
+
+  _onPlayers(players) {
+    if (this._disposed) return;
+    this.hud.setPlayers(players, this._playerId);
+    this.scene.setPlayerProfiles(players, this._playerId);
+  }
+
+  _onTraffic(players) {
+    if (this._disposed) return;
+    this.scene.applyTraffic(players, this._playerId);
+  }
+
+  _applySeed(value) {
+    const seed = String(value ?? '').trim().toUpperCase();
+    if (!seed) return;
+    this.seed = seed;
+    saveString(SEED_KEY, seed);
+    this._worldBuilt = false;
+    this.hud.setSeed(seed);
+    this.hud.setNotice('世界种子已应用，正在连接相同种子的多人世界…', { duration: 1800 });
+    this.socket?.disconnect();
+    this._connect();
+  }
+
+  _triggerNitro() {
+    const code = this.model.bindings?.boost;
+    if (!code) return;
+    this.socket?.sendKey(code, true);
+    setTimeout(() => this.socket?.sendKey(code, false), 90);
+  }
+
+  _setPlayerName(value) {
+    const name = String(value ?? '').trim().slice(0, 24) || '飞行员';
+    this.playerName = name;
+    saveString(PLAYER_NAME_KEY, name);
+    this.socket?.updateProfile(name, this.model.livery?.primary ?? '#35c6b1');
   }
 
   _setChunkRadius(value) {
@@ -318,6 +387,22 @@ function loadBoolean(key, fallback) {
 function saveBoolean(key, value) {
   try {
     localStorage.setItem(key, String(value));
+  } catch {
+    // Storage is optional; the current session still uses the value.
+  }
+}
+
+function loadString(key, fallback) {
+  try {
+    return localStorage.getItem(key)?.trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveString(key, value) {
+  try {
+    localStorage.setItem(key, value);
   } catch {
     // Storage is optional; the current session still uses the value.
   }

@@ -1,5 +1,6 @@
 package com.aerolab.web.flight;
 
+import com.aerolab.web.IdentityService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -17,10 +18,22 @@ public class FlightWebSocketHandler extends TextWebSocketHandler {
 
     private final ObjectMapper objectMapper;
     private final FlightSessionManager sessionManager;
+    private final IdentityService identityService;
 
-    public FlightWebSocketHandler(ObjectMapper objectMapper, FlightSessionManager sessionManager) {
+    public FlightWebSocketHandler(
+            ObjectMapper objectMapper,
+            FlightSessionManager sessionManager,
+            IdentityService identityService
+    ) {
         this.objectMapper = objectMapper;
         this.sessionManager = sessionManager;
+        this.identityService = identityService;
+    }
+
+    @Override
+    public void afterConnectionEstablished(WebSocketSession session) {
+        String cookieHeader = session.getHandshakeHeaders().getFirst("Cookie");
+        session.getAttributes().put("playerId", identityService.resolveCookieHeader(cookieHeader));
     }
 
     @Override
@@ -47,6 +60,15 @@ public class FlightWebSocketHandler extends TextWebSocketHandler {
                 case "weather" -> sessionManager.setWeatherEnabled(
                         session,
                         node.path("enabled").asBoolean(false)
+                );
+                case "autopilot" -> sessionManager.setAutopilot(
+                        session,
+                        node.path("template").asText("none")
+                );
+                case "profile" -> sessionManager.updateProfile(
+                        session,
+                        node.path("name").asText("飞行员"),
+                        node.path("color").asText("#35c6b1")
                 );
                 case "chunkRadius" -> sessionManager.setChunkRadius(
                         session,

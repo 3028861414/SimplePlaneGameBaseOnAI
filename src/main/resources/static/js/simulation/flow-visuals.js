@@ -65,8 +65,8 @@ function applySurfaceColors(geometry, surface, metric, speedMax) {
 export function createStreamlines(field, speedMax) {
   const lines = [];
   const colors = [];
-  const yCount = 7;
-  const zCount = 13;
+  const yCount = 9;
+  const zCount = 17;
   const size = field.bounds.getSize(new THREE.Vector3());
   const step = Math.max(field.minCell * 0.82, size.length() / 760);
   const maxSteps = 280;
@@ -90,7 +90,7 @@ export function createStreamlines(field, speedMax) {
   const material = new THREE.LineBasicMaterial({
     vertexColors: true,
     transparent: true,
-    opacity: 0.5,
+    opacity: 0.68,
     depthWrite: false,
     blending: THREE.AdditiveBlending
   });
@@ -135,7 +135,7 @@ function traceLine(field, start, step, maxSteps, speedMax, lines, colors) {
 }
 
 export class FlowParticles {
-  constructor(field, speedMax, count = 860) {
+  constructor(field, speedMax, count = 1800) {
     this.field = field;
     this.speedMax = speedMax;
     this.count = count;
@@ -147,12 +147,12 @@ export class FlowParticles {
     this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
     this.geometry.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
     this.material = new THREE.PointsMaterial({
-      size: Math.max(field.minCell * 0.2, 0.05),
+      size: Math.max(field.minCell * 0.34, 0.078),
       map: this.texture,
       vertexColors: true,
       transparent: true,
-      opacity: 0.68,
-      alphaTest: 0.01,
+      opacity: 0.94,
+      alphaTest: 0.005,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       sizeAttenuation: true
@@ -173,7 +173,7 @@ export class FlowParticles {
 
   update(delta) {
     const field = this.field;
-    const visualScale = 0.16;
+    const visualScale = 0.24;
     for (let i = 0; i < this.count; i++) {
       const base = i * 3;
       const position = new THREE.Vector3(

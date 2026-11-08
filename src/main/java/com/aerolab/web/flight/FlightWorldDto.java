@@ -14,7 +14,8 @@ public record FlightWorldDto(
         int loadedChunkCount,
         List<TerrainChunkDto> chunks,
         RunwayDto runway,
-        ModelDto.Vec3Dto start
+        ModelDto.Vec3Dto start,
+        String seed
 ) {
 
     public record RunwayDto(

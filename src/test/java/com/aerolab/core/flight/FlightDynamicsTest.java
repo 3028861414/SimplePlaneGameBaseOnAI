@@ -145,6 +145,26 @@ class FlightDynamicsTest {
         assertTrue(bound.throttle() > 0.5);
     }
 
+    @Test
+    void nitroDoublesThrustForFourSecondsAndThenCoolsDown() {
+        dynamics.setThrottle(1.0);
+        run(0.05);
+        double normalThrust = dynamics.snapshot().engineThrustN();
+        dynamics.setKey(KeyBindings.defaults().codeFor(KeyBindings.BOOST), true);
+        run(0.1);
+        dynamics.setKey(KeyBindings.defaults().codeFor(KeyBindings.BOOST), false);
+        FlightState active = dynamics.snapshot();
+        assertTrue(active.nitroActive());
+        assertEquals(normalThrust * 2, active.engineThrustN(), 1e-6);
+        assertEquals(2.0, active.nitroMultiplier(), 1e-9);
+
+        run(4.2);
+        FlightState cooling = dynamics.snapshot();
+        assertFalse(cooling.nitroActive());
+        assertTrue(cooling.nitroCooldownSeconds() > 0);
+        assertEquals(normalThrust, cooling.engineThrustN(), 1e-6);
+    }
+
     private void run(double seconds) {
         run(dynamics, seconds);
     }

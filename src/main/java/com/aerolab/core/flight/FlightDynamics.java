@@ -41,6 +41,9 @@ public final class FlightDynamics {
     private static final double MAX_ANGULAR_VELOCITY = 18;
     private static final double WEATHER_WIND_X = 4.0;
     private static final double WEATHER_WIND_Z = 6.5;
+    private static final double NITRO_MULTIPLIER = 2.0;
+    private static final double NITRO_DURATION_SECONDS = 4.0;
+    private static final double NITRO_COOLDOWN_SECONDS = 12.0;
 
     private final TerrainWorld world;
     private final FlightSystems systems;
@@ -84,9 +87,23 @@ public final class FlightDynamics {
     private boolean weatherEnabled;
     private double weatherBlend;
     private Vec3 windVelocity = Vec3.ZERO;
+    private final double spawnOffsetLateral;
+    private boolean nitroActive;
+    private double nitroRemainingSeconds;
+    private double nitroCooldownSeconds;
+    private boolean nitroWasRequested;
+    private Double autopilotPitch;
+    private Double autopilotRoll;
+    private Double autopilotYaw;
+    private Double autopilotThrottle;
 
     public FlightDynamics(TerrainWorld world, AircraftDefinition aircraft) {
+        this(world, aircraft, 0);
+    }
+
+    public FlightDynamics(TerrainWorld world, AircraftDefinition aircraft, double spawnOffsetLateral) {
         this.world = world;
+        this.spawnOffsetLateral = spawnOffsetLateral;
         this.systems = aircraft.systems();
         this.bindings = aircraft.bindings();
         FlightSystemsValidator.validate(systems);
@@ -163,8 +180,9 @@ public final class FlightDynamics {
         Vec3 start = world.runway().startPosition(0);
         orientation = Quat.fromYawPitchRoll(world.runway().headingRadians(), 0, 0);
         Vec3 comOffset = orientation.rotate(new Vec3(centerOfMass.x(), 0, centerOfMass.z()));
-        double startX = start.x() + comOffset.x();
-        double startZ = start.z() + comOffset.z();
+        double heading = world.runway().headingRadians();
+        double startX = start.x() - Math.sin(heading) * spawnOffsetLateral + comOffset.x();
+        double startZ = start.z() + Math.cos(heading) * spawnOffsetLateral + comOffset.z();
         double ground = world.heightAt(startX, startZ);
         position = new Vec3(startX, ground + groundComOffset, startZ);
         velocity = Vec3.ZERO;
@@ -188,6 +206,14 @@ public final class FlightDynamics {
         dragN = 0;
         aoaDeg = 0;
         gLoad = 1;
+        nitroActive = false;
+        nitroRemainingSeconds = 0;
+        nitroCooldownSeconds = 0;
+        nitroWasRequested = false;
+        autopilotPitch = null;
+        autopilotRoll = null;
+        autopilotYaw = null;
+        autopilotThrottle = null;
         controls.clear();
     }
 
@@ -198,19 +224,28 @@ public final class FlightDynamics {
         updateInputs(step);
         updateThrottle(step);
         updateWeather(step);
+        updateNitro(step);
         updateEngineThrust();
         if (onGround) stepOnGround(step);
         else stepInAir(step);
     }
 
     private void updateInputs(double dt) {
-        double rate = Math.min(1, dt * 6.0);
-        pitchInput += (controls.pitchDirection() - pitchInput) * rate;
-        yawInput += (controls.yawDirection() - yawInput) * rate;
-        rollInput += (controls.rollDirection() - rollInput) * rate;
+        double rate = Math.min(1, dt * (autopilotPitch == null ? 6.0 : 3.6));
+        double pitchTarget = autopilotPitch != null ? autopilotPitch : controls.pitchDirection();
+        double yawTarget = autopilotYaw != null ? autopilotYaw : controls.yawDirection();
+        double rollTarget = autopilotRoll != null ? autopilotRoll : controls.rollDirection();
+        pitchInput += (clamp(pitchTarget, -1, 1) - pitchInput) * rate;
+        yawInput += (clamp(yawTarget, -1, 1) - yawInput) * rate;
+        rollInput += (clamp(rollTarget, -1, 1) - rollInput) * rate;
     }
 
     private void updateThrottle(double dt) {
+        if (autopilotThrottle != null) {
+            double target = clamp(autopilotThrottle, 0, 1);
+            adjustAllEngineThrottle((target - averageEngineThrottle()) * Math.min(1, dt * 1.6));
+            return;
+        }
         double direction = controls.throttleDirection();
         if (direction > 0) adjustAllEngineThrottle(THROTTLE_RATE * dt);
         if (direction < 0) adjustAllEngineThrottle(-THROTTLE_RATE * dt);
@@ -228,8 +263,27 @@ public final class FlightDynamics {
         throttle = averageEngineThrottle();
     }
 
+    private void updateNitro(double dt) {
+        boolean requested = controls.boost();
+        if (requested && !nitroWasRequested && !nitroActive && nitroCooldownSeconds <= 0) {
+            nitroActive = true;
+            nitroRemainingSeconds = NITRO_DURATION_SECONDS;
+        }
+        nitroWasRequested = requested;
+
+        if (nitroActive) {
+            nitroRemainingSeconds = Math.max(0, nitroRemainingSeconds - dt);
+            if (nitroRemainingSeconds <= 0) {
+                nitroActive = false;
+                nitroCooldownSeconds = NITRO_COOLDOWN_SECONDS;
+            }
+        } else if (nitroCooldownSeconds > 0) {
+            nitroCooldownSeconds = Math.max(0, nitroCooldownSeconds - dt);
+        }
+    }
+
     private void updateEngineThrust() {
-        double boost = controls.boost() ? 1.35 : 1.0;
+        double boost = nitroActive ? NITRO_MULTIPLIER : 1.0;
         double total = 0;
         engineThrusts.clear();
         for (EngineSpec engine : systems.engines()) {
@@ -614,7 +668,13 @@ public final class FlightDynamics {
                 crashed,
                 stalled,
                 false,
-                crashReason
+                crashReason,
+                nitroActive,
+                nitroRemainingSeconds,
+                nitroCooldownSeconds,
+                NITRO_DURATION_SECONDS,
+                NITRO_COOLDOWN_SECONDS,
+                NITRO_MULTIPLIER
         );
     }
 
@@ -634,6 +694,30 @@ public final class FlightDynamics {
 
     public synchronized void setWeatherEnabled(boolean enabled) {
         this.weatherEnabled = enabled;
+    }
+
+    public synchronized void setAutopilotCommand(
+            Double pitch,
+            Double roll,
+            Double yaw,
+            Double throttle
+    ) {
+        this.autopilotPitch = pitch == null ? null : clamp(pitch, -1, 1);
+        this.autopilotRoll = roll == null ? null : clamp(roll, -1, 1);
+        this.autopilotYaw = yaw == null ? null : clamp(yaw, -1, 1);
+        this.autopilotThrottle = throttle == null ? null : clamp(throttle, 0, 1);
+    }
+
+    public synchronized void clearAutopilotCommand() {
+        autopilotPitch = null;
+        autopilotRoll = null;
+        autopilotYaw = null;
+        autopilotThrottle = null;
+    }
+
+    public synchronized boolean autopilotControlActive() {
+        return autopilotPitch != null || autopilotRoll != null
+                || autopilotYaw != null || autopilotThrottle != null;
     }
 
     private List<EngineState> engineStates() {

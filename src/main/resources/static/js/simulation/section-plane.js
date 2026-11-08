@@ -303,31 +303,19 @@ export class SectionPlane {
   }
 
   _applySoftEdgeMask(data, validMask, width, height) {
-    const shortEdge = Math.max(1, Math.min(width, height));
-    const feather = Math.max(2, Math.min(18, Math.round(shortEdge * 0.08)));
-    const radius = shortEdge * 0.24;
-
+    const halfWidth = Math.max(1, (width - 1) * 0.5);
+    const halfHeight = Math.max(1, (height - 1) * 0.5);
     for (let y = 0; y < height; y++) {
+      const ny = (y - halfHeight) / halfHeight;
       for (let x = 0; x < width; x++) {
         const index = y * width + x;
         if (!validMask[index]) {
           data[index * 4 + 3] = 0;
           continue;
         }
-        const edgeDistance = Math.min(x, y, width - 1 - x, height - 1 - y);
-        let alpha = smoothstep(0, feather, edgeDistance);
-
-        if (x < radius && y < radius) {
-          alpha *= 1 - smoothstep(radius - feather, radius, Math.hypot(x - radius, y - radius));
-        } else if (x >= width - radius && y < radius) {
-          alpha *= 1 - smoothstep(radius - feather, radius, Math.hypot(x - (width - 1 - radius), y - radius));
-        } else if (x < radius && y >= height - radius) {
-          alpha *= 1 - smoothstep(radius - feather, radius, Math.hypot(x - radius, y - (height - 1 - radius)));
-        } else if (x >= width - radius && y >= height - radius) {
-          alpha *= 1 - smoothstep(radius - feather, radius,
-            Math.hypot(x - (width - 1 - radius), y - (height - 1 - radius)));
-        }
-
+        const nx = (x - halfWidth) / halfWidth;
+        const radius = Math.sqrt(nx * nx + ny * ny);
+        const alpha = 1 - smoothstep(0.86, 1, radius);
         data[index * 4 + 3] = Math.round(235 * alpha);
       }
     }

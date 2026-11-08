@@ -32,7 +32,15 @@ public record FlightStateDto(
         boolean crashed,
         boolean stalled,
         boolean outsideWorld,
-        String crashReason
+        String crashReason,
+        boolean nitroActive,
+        double nitroRemainingSeconds,
+        double nitroCooldownSeconds,
+        double nitroDurationSeconds,
+        double nitroCooldownDurationSeconds,
+        double nitroMultiplier,
+        String autopilotTemplate,
+        double autopilotProgress
 ) {
 
     public record QuatDto(double x, double y, double z, double w) {
@@ -48,6 +56,10 @@ public record FlightStateDto(
     }
 
     public static FlightStateDto from(FlightState state) {
+        return from(state, null, 0);
+    }
+
+    public static FlightStateDto from(FlightState state, String autopilotTemplate, double autopilotProgress) {
         return new FlightStateDto(
                 state.timeSeconds(),
                 new ModelDto.Vec3Dto(state.position().x(), state.position().y(), state.position().z()),
@@ -96,7 +108,15 @@ public record FlightStateDto(
                 state.crashed(),
                 state.stalled(),
                 state.outsideWorld(),
-                state.crashReason()
+                state.crashReason(),
+                state.nitroActive(),
+                state.nitroRemainingSeconds(),
+                state.nitroCooldownSeconds(),
+                state.nitroDurationSeconds(),
+                state.nitroCooldownDurationSeconds(),
+                state.nitroMultiplier(),
+                autopilotTemplate,
+                autopilotProgress
         );
     }
 }

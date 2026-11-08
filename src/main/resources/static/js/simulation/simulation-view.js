@@ -215,7 +215,7 @@ export class SimulationView {
             <div class="sim-field__ticks"><span data-section-min>—</span><span data-section-max>—</span></div>
           </div>
 
-          <p class="section-caption">彩色切片为场数据，橙色轮廓为模型与剖面的交线，灰色斜纹为实体截面。</p>
+          <p class="section-caption">彩色切片为场数据，椭圆软边视窗会淡出边界；橙色轮廓为模型与剖面的交线，灰色斜纹为实体截面。</p>
           <button class="cockpit-launch" type="button" data-action="cockpit" disabled>
             <span class="cockpit-launch__icon">${icon('camera', 19)}</span>
             <span><strong>进入驾驶舱视角</strong><small>使用建模阶段定义的相机</small></span>
@@ -592,7 +592,7 @@ export class SimulationView {
     this.streamlines = createStreamlines(field, this.speedMax);
     this.dynamicRoot.add(this.streamlines);
 
-    this.particles = new FlowParticles(field, this.speedMax, 900);
+    this.particles = new FlowParticles(field, this.speedMax, 2400);
     this.dynamicRoot.add(this.particles.points);
 
     this.volume = createFlowVolume(field, this.speedMax);

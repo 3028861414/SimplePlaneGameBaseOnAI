@@ -7,9 +7,20 @@ public final class FlightMessages {
     private FlightMessages() {
     }
 
-    public record Ready(String type, FlightWorldDto world, FlightStateDto state) {
-        public Ready(FlightWorldDto world, FlightStateDto state) {
-            this("ready", world, state);
+    public record Ready(
+            String type,
+            FlightWorldDto world,
+            FlightStateDto state,
+            String playerId,
+            java.util.List<MultiplayerHub.PlayerProfile> players
+    ) {
+        public Ready(
+                FlightWorldDto world,
+                FlightStateDto state,
+                String playerId,
+                java.util.List<MultiplayerHub.PlayerProfile> players
+        ) {
+            this("ready", world, state, playerId, players);
         }
     }
 
@@ -27,6 +38,18 @@ public final class FlightMessages {
     ) {
         public Chunks(List<TerrainChunkDto> added, List<String> removed, int chunkRadius) {
             this("chunks", added, removed, chunkRadius);
+        }
+    }
+
+    public record Players(String type, java.util.List<MultiplayerHub.PlayerProfile> players) {
+        public Players(java.util.List<MultiplayerHub.PlayerProfile> players) {
+            this("players", players);
+        }
+    }
+
+    public record Traffic(String type, java.util.List<MultiplayerHub.PlayerState> players) {
+        public Traffic(java.util.List<MultiplayerHub.PlayerState> players) {
+            this("traffic", players);
         }
     }
 
